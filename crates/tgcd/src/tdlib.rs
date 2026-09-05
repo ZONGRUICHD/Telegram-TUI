@@ -21,8 +21,3 @@ pub async fn query(td: &tg_tdjson::TdClient, query: JsonValue) -> anyhow::Result
     }
     Ok(response)
 }
-
-/// Fire-and-forget TDLib query.
-pub fn notify(td: &tg_tdjson::TdClient, query: JsonValue) {
-    td.send_no_wait(query);
-}

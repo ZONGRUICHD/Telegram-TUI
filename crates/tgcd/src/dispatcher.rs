@@ -5,12 +5,36 @@ use tracing::{debug, warn};
 
 use crate::cache::Cache;
 
-pub async fn run_cache_updater(_td: tg_tdjson::TdClient, cache: Cache) {
-    let mut rx = tg_tdjson::subscribe_updates();
+#[derive(Default)]
+pub struct Snapshot {
+    pub folders: Vec<JsonValue>,
+    pub users: std::collections::HashMap<i64, JsonValue>,
+    pub connection: JsonValue,
+}
 
+pub async fn run_cache_updater(
+    cache: Cache,
+    mut rx: tokio::sync::broadcast::Receiver<JsonValue>,
+    snapshot: std::sync::Arc<std::sync::RwLock<Snapshot>>,
+) {
     loop {
         match rx.recv().await {
             Ok(ev) => {
+                {
+                    let mut s = snapshot.write().unwrap();
+                    match ev["@type"].as_str().unwrap_or("") {
+                        "updateChatFolders" => {
+                            s.folders = ev["chat_folders"].as_array().cloned().unwrap_or_default()
+                        }
+                        "updateUser" => {
+                            if let Some(id) = ev["user"]["id"].as_i64() {
+                                s.users.insert(id, ev["user"].clone());
+                            }
+                        }
+                        "updateConnectionState" => s.connection = ev["state"].clone(),
+                        _ => {}
+                    }
+                }
                 if let Err(e) = process_event(&ev, &cache).await {
                     debug!("cache update error: {e}");
                 }

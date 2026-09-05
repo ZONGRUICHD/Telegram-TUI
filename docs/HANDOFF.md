@@ -62,3 +62,11 @@
 - 本机默认 MSVC 缺少构建工具，安装了独立的 `stable-x86_64-pc-windows-gnu` 工具链进行验证，未修改用户默认工具链。
 - 官方协议基准：TDLib `d1085f9cebc5a62379991ae1652673954f229c1f`；Desktop 参考提交 `80158983dba09d3bf5d96701f21473d6c34bf5f5`。后续发布应固定同一 TDLib 提交，不能沿用旧版 1.8.0。
 - 第二步验证：Windows GNU cargo check、全 workspace 严格 Clippy 通过；IPC 本地往返与请求关联集成测试共 2 项通过。
+
+### 第三步：AI CLI 与消息操作
+
+- JSON 信封、管道默认 JSON、非零错误码、请求超时、dry-run、stdin / 文件输入；详见 [AI CLI 契约](AI-CLI.md)。
+- 支持历史和搜索游标、聊天列表分页/文件夹、用户名与收藏夹解析、回复/编辑/撤回/转发、附件发送/下载、置顶/归档/静音、联系人/成员/话题、NDJSON 更新订阅、高级 TDLib 调用。
+- 标记已读先获取实际消息 ID；不再对读取操作隐式已读，也不把异步发送受理显示成已送达。
+- 官方 schema 新版附件采用 inputDocument / inputPhoto 嵌套，代理采用 proxy 对象；按固定提交实现。
+- 第二步 GitHub CI 三个平台全绿。第三步本机全 workspace 测试 13 项通过，严格 Clippy 通过；集成测试使用独立临时配置和模拟 IPC，不使用真实 Telegram 账号。

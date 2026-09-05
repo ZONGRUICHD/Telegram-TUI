@@ -198,7 +198,11 @@ fn handle_event(msg: &ServerMessage, app: &mut App) {
         ServerMessage::Response(resp) => {
             if let Some(result) = &resp.result {
                 // Chat list: handler returns array of Chat objects
-                if let Some(arr) = result.as_array() {
+                if let Some(arr) = result
+                    .get("chats")
+                    .and_then(|v| v.as_array())
+                    .or_else(|| result.as_array())
+                {
                     if arr
                         .first()
                         .map(|v| v.get("title").is_some())

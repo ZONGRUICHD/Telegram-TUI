@@ -25,3 +25,8 @@ crossterm     = { workspace = true }
 chrono        = { workspace = true }
 uuid          = { workspace = true }
 rpassword = "7"
+
+[dev-dependencies]
+bytes = { workspace = true }
+futures-util = { workspace = true }
+tokio-util = { workspace = true }

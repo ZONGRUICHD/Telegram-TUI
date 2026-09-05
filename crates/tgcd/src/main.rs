@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
         .context("此 TDLib 会话正在被另一服务使用")?;
     tg_tdjson::load_library()?;
     tg_tdjson::set_log_verbosity(config.tdlib.verbosity);
-    let (updates_tx, _) = broadcast::channel(4096);
+    let (updates_tx, updates_rx) = broadcast::channel(4096);
     tg_tdjson::init(updates_tx.clone());
     let td = tg_tdjson::TdClient::new();
     let auth = tdlib::query(&td, serde_json::json!({"@type":"getAuthorizationState"})).await?;
@@ -96,7 +96,12 @@ async fn main() -> Result<()> {
             "enable":true,"comment":"Telegram-TUI"})).await?;
     }
     let cache = cache::Cache::new(&config.database_path()).await?;
-    let cache_task = tokio::spawn(dispatcher::run_cache_updater(td.clone(), cache.clone()));
+    let snapshot = std::sync::Arc::new(std::sync::RwLock::new(dispatcher::Snapshot::default()));
+    let cache_task = tokio::spawn(dispatcher::run_cache_updater(
+        cache.clone(),
+        updates_rx,
+        snapshot.clone(),
+    ));
     let (shutdown_tx, _) = watch::channel(false);
     let state = handler::AppState {
         config: config.clone(),
@@ -104,6 +109,7 @@ async fn main() -> Result<()> {
         cache,
         updates_tx,
         shutdown_tx,
+        snapshot,
     };
     let result = ipc::run(&config.ipc.socket_path, state).await;
     let _ = tdlib::query(&td, serde_json::json!({"@type":"close"})).await;
