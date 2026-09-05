@@ -1925,10 +1925,12 @@ name = "tg"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "chrono",
  "clap",
  "crossterm",
  "directories",
+ "futures-util",
  "ratatui",
  "rpassword",
  "serde",
@@ -1936,6 +1938,7 @@ dependencies = [
  "tg-core",
  "tg-ipc",
  "tokio",
+ "tokio-util",
  "toml",
  "tracing",
  "tracing-subscriber",
