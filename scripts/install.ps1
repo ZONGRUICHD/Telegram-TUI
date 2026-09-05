@@ -1,13 +1,13 @@
-# Telegram-CLI Windows 安装脚本 (PowerShell)
+# Telegram-TUI Windows 安装脚本 (PowerShell)
 #
 # 用法:
-#   irm https://raw.githubusercontent.com/zong1024/Telegram-CLI/main/scripts/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/ZONGRUICHD/Telegram-TUI/main/scripts/install.ps1 | iex
 #   或
 #   .\scripts\install.ps1
 
 $ErrorActionPreference = "Stop"
 
-$REPO_URL = "https://github.com/zong1024/Telegram-CLI.git"
+$REPO_URL = "https://github.com/ZONGRUICHD/Telegram-TUI.git"
 $INSTALL_DIR = "$env:USERPROFILE\.cargo\bin"
 
 function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
@@ -16,7 +16,7 @@ function Write-Warn($msg) { Write-Host "  ⚠️ $msg" -ForegroundColor Yellow }
 function Write-Err($msg)  { Write-Host "  ❌ $msg" -ForegroundColor Red }
 
 Write-Host ""
-Write-Host "  Telegram-CLI Windows 安装程序" -ForegroundColor Cyan -Bold
+Write-Host "  Telegram-TUI Windows 安装程序" -ForegroundColor Cyan -Bold
 Write-Host "  ────────────────────────────" -ForegroundColor Cyan
 Write-Host ""
 
@@ -77,7 +77,7 @@ if (-not $tdjsonFound) {
 # ── Step 3: 克隆/更新项目 ──────────────────────────────────────────
 
 Write-Step "获取源码"
-$projectDir = "$env:TEMP\Telegram-CLI"
+$projectDir = "$env:TEMP\Telegram-TUI"
 if (-not (Test-Path "$projectDir\Cargo.toml")) {
     git clone --depth 1 $REPO_URL $projectDir
 } else {
@@ -88,7 +88,7 @@ if (-not (Test-Path "$projectDir\Cargo.toml")) {
 
 # ── Step 4: 编译 ───────────────────────────────────────────────────
 
-Write-Step "编译 Telegram-CLI…"
+Write-Step "编译 Telegram-TUI…"
 Push-Location $projectDir
 cargo build --release
 if ($LASTEXITCODE -ne 0) {
@@ -125,7 +125,7 @@ if ($env:PATH -notlike "*$INSTALL_DIR*") {
 
 Write-Host ""
 Write-Host "═══════════════════════════════════════════" -ForegroundColor Green
-Write-Host "  ✅  Telegram-CLI 安装完成！" -ForegroundColor Green -Bold
+Write-Host "  ✅  Telegram-TUI 安装完成！" -ForegroundColor Green -Bold
 Write-Host "═══════════════════════════════════════════" -ForegroundColor Green
 Write-Host ""
 Write-Host "  下一步:"

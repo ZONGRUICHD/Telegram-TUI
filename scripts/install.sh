@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Telegram-CLI 一键安装脚本
+# Telegram-TUI 一键安装脚本
 # 支持 Arch / Debian|Ubuntu / macOS
 #
 # 用法:
-#   curl -fsSL https://raw.githubusercontent.com/zong1024/Telegram-CLI/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/ZONGRUICHD/Telegram-TUI/main/scripts/install.sh | bash
 #   或
 #   ./scripts/install.sh
 #
@@ -35,7 +35,7 @@ fail()  { echo -e "${RED}❌${RESET}  $*"; exit 1; }
 # ── 配置 ────────────────────────────────────────────────────────────
 
 PREFIX="${PREFIX:-$HOME/.cargo/bin}"
-REPO_URL="https://github.com/zong1024/Telegram-CLI.git"
+REPO_URL="https://github.com/ZONGRUICHD/Telegram-TUI.git"
 TD_VERSION="1.8.0"
 
 # ── OS 检测 ──────────────────────────────────────────────────────────
@@ -302,7 +302,7 @@ setup_tdlib() {
 # ── Step 4: 编译项目 ────────────────────────────────────────────────
 
 build_project() {
-    info "编译 Telegram-CLI…"
+    info "编译 Telegram-TUI…"
 
     # 确定项目目录
     local project_dir=""
@@ -313,7 +313,7 @@ build_project() {
     fi
 
     if [[ -z "$project_dir" ]]; then
-        project_dir="/tmp/Telegram-CLI"
+        project_dir="/tmp/Telegram-TUI"
         if [[ ! -d "$project_dir" ]]; then
             info "克隆仓库…"
             git clone --depth 1 "$REPO_URL" "$project_dir"
@@ -375,7 +375,7 @@ install_binaries() {
         if ! grep -q "export PATH=.*${PREFIX}" "$shell_rc" 2>/dev/null; then
             {
                 echo ""
-                echo "# Telegram-CLI"
+                echo "# Telegram-TUI"
                 echo "export PATH=\"${PREFIX}:\$PATH\""
             } >> "$shell_rc"
             info "已添加到 ${shell_rc}"
@@ -436,7 +436,7 @@ EOF
 print_summary() {
     echo ""
     echo -e "${GREEN}${BOLD}═══════════════════════════════════════════${RESET}"
-    echo -e "${GREEN}${BOLD}  ✅  Telegram-CLI 安装完成！${RESET}"
+    echo -e "${GREEN}${BOLD}  ✅  Telegram-TUI 安装完成！${RESET}"
     echo -e "${GREEN}${BOLD}═══════════════════════════════════════════${RESET}"
     echo ""
     echo -e "  ${BOLD}二进制:${RESET}  ${PREFIX}/tg  ${PREFIX}/tgcd"
@@ -467,7 +467,7 @@ print_summary() {
 
 main() {
     echo ""
-    echo -e "${CYAN}${BOLD}  Telegram-CLI 安装程序${RESET}"
+    echo -e "${CYAN}${BOLD}  Telegram-TUI 安装程序${RESET}"
     echo -e "${CYAN}  ─────────────────────${RESET}"
     echo ""
 

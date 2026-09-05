@@ -4,7 +4,7 @@ Release:        1%{?dist}
 Summary:        Telegram CLI - terminal Telegram client
 
 License:        MIT
-URL:            https://github.com/zong1024/Telegram-CLI
+URL:            https://github.com/ZONGRUICHD/Telegram-TUI
 Source0:        %{url}/archive/v%{version}/%{name}-%{version}.tar.gz
 
 BuildRequires:  cargo
@@ -19,7 +19,7 @@ terminal. Features include message management, channel monitoring, file
 operations, and a ratatui-powered TUI interface.
 
 %prep
-%autosetup -n Telegram-CLI-%{version}
+%autosetup -n Telegram-TUI-%{version}
 
 %build
 cargo build --release

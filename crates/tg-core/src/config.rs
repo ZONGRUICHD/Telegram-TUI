@@ -108,7 +108,7 @@ fn default_lang() -> String {
     "en".into()
 }
 fn default_device() -> String {
-    "Telegram-CLI".into()
+    "Telegram-TUI".into()
 }
 fn default_proxy_kind() -> String {
     "socks5".into()
