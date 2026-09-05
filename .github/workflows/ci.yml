@@ -8,40 +8,27 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  TDLIB_VERSION: "1.8.0"
 
 jobs:
   check:
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache TDLib
-        id: cache-tdlib
-        uses: actions/cache@v4
         with:
-          path: /usr/local/lib/libtdjson*
-          key: tdlib-${{ env.TDLIB_VERSION }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
 
-      - name: Install TDLib
-        if: steps.cache-tdlib.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake gperf zlib1g-dev libssl-dev libdbus-1-dev
-          git clone --depth 1 --branch "v${{ env.TDLIB_VERSION }}" https://github.com/tdlib/td.git /tmp/td
-          cd /tmp/td && mkdir build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DTD_ENABLE_JNI=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-          cmake --build . --parallel $(nproc)
-          sudo cmake --install .
-          sudo ldconfig
-
-      - name: Install system deps
-        run: sudo apt-get install -y libdbus-1-dev
+      - name: Format
+        run: cargo fmt --all -- --check
 
       - name: Check
-        run: cargo check --workspace
+        run: cargo check --workspace --locked
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked

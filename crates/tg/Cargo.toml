@@ -24,3 +24,4 @@ ratatui       = { workspace = true }
 crossterm     = { workspace = true }
 chrono        = { workspace = true }
 uuid          = { workspace = true }
+rpassword = "7"

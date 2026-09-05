@@ -41,7 +41,16 @@ async fn process_event(ev: &JsonValue, cache: &Cache) -> anyhow::Result<()> {
 
             if chat_id != 0 && msg_id != 0 {
                 cache
-                    .upsert_message(chat_id, msg_id, sender_id, text, date, is_outgoing, &content_type, msg)
+                    .upsert_message(
+                        chat_id,
+                        msg_id,
+                        sender_id,
+                        text,
+                        date,
+                        is_outgoing,
+                        &content_type,
+                        msg,
+                    )
                     .await?;
             }
         }
@@ -57,14 +66,18 @@ async fn process_event(ev: &JsonValue, cache: &Cache) -> anyhow::Result<()> {
             let chat_id = ev["chat_id"].as_i64().unwrap_or(0);
             let title = ev["title"].as_str().unwrap_or("");
             if chat_id != 0 {
-                cache.upsert_chat(chat_id, title, "private", None, 0).await?;
+                cache
+                    .upsert_chat(chat_id, title, "private", None, 0)
+                    .await?;
             }
         }
         "updateUnreadMessageCount" => {
             let chat_id = ev["chat_id"].as_i64().unwrap_or(0);
             let unread = ev["unread_count"].as_i64().unwrap_or(0) as i32;
             if chat_id != 0 {
-                cache.upsert_chat(chat_id, "", "private", None, unread).await?;
+                cache
+                    .upsert_chat(chat_id, "", "private", None, unread)
+                    .await?;
             }
         }
         "updateFile" => {
@@ -89,7 +102,10 @@ async fn process_event(ev: &JsonValue, cache: &Cache) -> anyhow::Result<()> {
 
 fn detect_content_type(msg: &JsonValue) -> String {
     let content = &msg["content"];
-    let msg_type = content.get("@type").and_then(|v| v.as_str()).unwrap_or("messageText");
+    let msg_type = content
+        .get("@type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("messageText");
     match msg_type {
         "messageText" => "text",
         "messagePhoto" => "photo",

@@ -24,7 +24,10 @@ use tg_ipc::client::{IpcClient, IpcWriter};
 use tg_ipc::protocol::{methods, ServerMessage};
 
 #[derive(PartialEq)]
-enum Focus { Dialogs, Input }
+enum Focus {
+    Dialogs,
+    Input,
+}
 
 struct App {
     dialogs: Vec<(i64, String, i32)>,
@@ -53,13 +56,8 @@ impl App {
     }
 }
 
-pub async fn run() -> Result<()> {
-    let config = TgConfig::load()?;
+pub async fn run(config: TgConfig) -> Result<()> {
     let socket = &config.ipc.socket_path;
-    if !socket.exists() {
-        eprintln!("❌  Daemon not running. Start: tgcd");
-        std::process::exit(1);
-    }
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -81,11 +79,13 @@ pub async fn run() -> Result<()> {
     });
 
     // Request initial dialogs
-    writer.send_request(&tg_ipc::protocol::Request {
-        id: uuid::Uuid::new_v4().to_string(),
-        method: methods::LIST_DIALOGS.to_string(),
-        params: serde_json::json!({"limit": 50}),
-    }).await?;
+    writer
+        .send_request(&tg_ipc::protocol::Request {
+            id: uuid::Uuid::new_v4().to_string(),
+            method: methods::LIST_DIALOGS.to_string(),
+            params: serde_json::json!({"limit": 50}),
+        })
+        .await?;
 
     let mut app = App::new();
     app.status = "Loading…".into();
@@ -95,19 +95,25 @@ pub async fn run() -> Result<()> {
 
     loop {
         terminal.draw(|f| ui(f, &app))?;
-        let timeout = tick.checked_sub(last_tick.elapsed()).unwrap_or(Duration::ZERO);
+        let timeout = tick
+            .checked_sub(last_tick.elapsed())
+            .unwrap_or(Duration::ZERO);
 
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
                 handle_key(key, &mut app, &mut writer).await?;
             }
         }
-        if last_tick.elapsed() >= tick { last_tick = Instant::now(); }
+        if last_tick.elapsed() >= tick {
+            last_tick = Instant::now();
+        }
 
         while let Ok(msg) = msg_rx.try_recv() {
             handle_event(&msg, &mut app);
         }
-        if !app.running { break; }
+        if !app.running {
+            break;
+        }
     }
 
     disable_raw_mode()?;
@@ -140,24 +146,34 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &mut IpcWriter) -> Res
             _ => {}
         },
         Focus::Input => match key.code {
-            KeyCode::Esc => { app.input.clear(); app.focus = Focus::Dialogs; }
+            KeyCode::Esc => {
+                app.input.clear();
+                app.focus = Focus::Dialogs;
+            }
             KeyCode::Enter => {
-                let text: String = app.input.drain(..).collect();
+                let text: String = std::mem::take(&mut app.input);
                 if !text.is_empty() {
-                    if text.starts_with("/q") { app.running = false; }
-                    else if let Some(chat) = app.current_chat() {
-                        writer.send_request(&tg_ipc::protocol::Request {
-                            id: uuid::Uuid::new_v4().to_string(),
-                            method: methods::SEND_MESSAGE.to_string(),
-                            params: serde_json::json!({"chat_id": chat, "text": text}),
-                        }).await?;
+                    if text.starts_with("/q") {
+                        app.running = false;
+                    } else if let Some(chat) = app.current_chat() {
+                        writer
+                            .send_request(&tg_ipc::protocol::Request {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                method: methods::SEND_MESSAGE.to_string(),
+                                params: serde_json::json!({"chat_id": chat, "text": text}),
+                            })
+                            .await?;
                     }
                 }
             }
-            KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            KeyCode::Char(c)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
                 app.input.push(c);
             }
-            KeyCode::Backspace => { app.input.pop(); }
+            KeyCode::Backspace => {
+                app.input.pop();
+            }
             _ => {}
         },
     }
@@ -166,11 +182,13 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &mut IpcWriter) -> Res
 
 async fn load_msgs(app: &mut App, writer: &mut IpcWriter) -> Result<()> {
     if let Some(chat) = app.current_chat() {
-        writer.send_request(&tg_ipc::protocol::Request {
-            id: uuid::Uuid::new_v4().to_string(),
-            method: methods::GET_MESSAGES.to_string(),
-            params: serde_json::json!({"chat_id": chat, "limit": 200}),
-        }).await?;
+        writer
+            .send_request(&tg_ipc::protocol::Request {
+                id: uuid::Uuid::new_v4().to_string(),
+                method: methods::GET_MESSAGES.to_string(),
+                params: serde_json::json!({"chat_id": chat, "limit": 200}),
+            })
+            .await?;
     }
     Ok(())
 }
@@ -181,7 +199,11 @@ fn handle_event(msg: &ServerMessage, app: &mut App) {
             if let Some(result) = &resp.result {
                 // Chat list: handler returns array of Chat objects
                 if let Some(arr) = result.as_array() {
-                    if arr.first().map(|v| v.get("title").is_some()).unwrap_or(false) {
+                    if arr
+                        .first()
+                        .map(|v| v.get("title").is_some())
+                        .unwrap_or(false)
+                    {
                         app.dialogs.clear();
                         for item in arr {
                             let id = item["id"].as_i64().unwrap_or(0);
@@ -203,20 +225,26 @@ fn handle_event(msg: &ServerMessage, app: &mut App) {
                         let sender = if is_out {
                             "Me".to_string()
                         } else {
-                            m["sender_id"]["user_id"].as_i64()
+                            m["sender_id"]["user_id"]
+                                .as_i64()
                                 .map(|u| format!("user#{u}"))
                                 .unwrap_or_else(|| "system".into())
                         };
                         let text = m["content"]["text"]["text"]
                             .as_str()
                             .map(|s| s.to_string())
-                            .or_else(|| m["content"]["caption"]["text"].as_str().map(|s| s.to_string()))
+                            .or_else(|| {
+                                m["content"]["caption"]["text"]
+                                    .as_str()
+                                    .map(|s| s.to_string())
+                            })
                             .unwrap_or_else(|| detect_content_label(m));
                         let ts = m["date"].as_i64().unwrap_or(0);
                         app.messages.push((id, sender, text, fmt_time(ts)));
                     }
                 } else {
-                    let keys: Vec<String> = result.as_object()
+                    let keys: Vec<String> = result
+                        .as_object()
                         .map(|o| o.keys().cloned().collect())
                         .unwrap_or_default();
                     app.status = format!("resp keys: {:?}", keys);
@@ -227,7 +255,9 @@ fn handle_event(msg: &ServerMessage, app: &mut App) {
             }
         }
         ServerMessage::Event(ev) => {
-            if ev.name == "new_message" { app.status = "📨 New message".into(); }
+            if ev.name == "new_message" {
+                app.status = "📨 New message".into();
+            }
         }
         ServerMessage::AuthState(a) => {
             app.status = format!("🔐 {}", a.state);
@@ -247,8 +277,11 @@ fn ui(f: &mut Frame, app: &App) {
         .split(f.area());
 
     f.render_widget(
-        Paragraph::new(" 📱 tg tui │ j/k navigate │ i input │ /q quit ")
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Paragraph::new(" 📱 tg tui │ j/k navigate │ i input │ /q quit ").style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         chunks[0],
     );
 
@@ -258,38 +291,84 @@ fn ui(f: &mut Frame, app: &App) {
         .split(chunks[1]);
 
     // Chat list
-    let ds = if app.focus == Focus::Dialogs { Style::default().fg(Color::Yellow) } else { Style::default() };
-    let items: Vec<ListItem> = app.dialogs.iter().enumerate().map(|(i, (_id, title, unread))| {
-        let s = if i == app.selected {
-            Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
-        } else { Style::default() };
-        let p = if *unread > 0 { format!("({unread}) ") } else { String::new() };
-        ListItem::new(Line::from(Span::styled(format!("{p}{title}"), s)))
-    }).collect();
+    let ds = if app.focus == Focus::Dialogs {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
+    let items: Vec<ListItem> = app
+        .dialogs
+        .iter()
+        .enumerate()
+        .map(|(i, (_id, title, unread))| {
+            let s = if i == app.selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let p = if *unread > 0 {
+                format!("({unread}) ")
+            } else {
+                String::new()
+            };
+            ListItem::new(Line::from(Span::styled(format!("{p}{title}"), s)))
+        })
+        .collect();
     f.render_widget(
-        List::new(items).block(Block::default().borders(Borders::ALL).title(" Chats ").border_style(ds)),
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Chats ")
+                .border_style(ds),
+        ),
         body[0],
     );
 
     // Messages
-    let msgs: Vec<Line> = app.messages.iter().map(|(_, sender, text, time)| {
-        let sender_color = if sender == "Me" { Color::Green } else { Color::Cyan };
-        Line::from(vec![
-            Span::styled(format!("[{time}] "), Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{sender}: "), Style::default().fg(sender_color).add_modifier(Modifier::BOLD)),
-            Span::raw(text.as_str()),
-        ])
-    }).collect();
+    let msgs: Vec<Line> = app
+        .messages
+        .iter()
+        .map(|(_, sender, text, time)| {
+            let sender_color = if sender == "Me" {
+                Color::Green
+            } else {
+                Color::Cyan
+            };
+            Line::from(vec![
+                Span::styled(format!("[{time}] "), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{sender}: "),
+                    Style::default()
+                        .fg(sender_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(text.as_str()),
+            ])
+        })
+        .collect();
     f.render_widget(
-        Paragraph::new(msgs).block(Block::default().borders(Borders::ALL).title(" Messages ")).wrap(Wrap { trim: false }),
+        Paragraph::new(msgs)
+            .block(Block::default().borders(Borders::ALL).title(" Messages "))
+            .wrap(Wrap { trim: false }),
         body[1],
     );
 
     // Input
-    let is = if app.focus == Focus::Input { Style::default().fg(Color::Yellow) } else { Style::default() };
+    let is = if app.focus == Focus::Input {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
     f.render_widget(
-        Paragraph::new(format!("{}█", app.input))
-            .block(Block::default().borders(Borders::ALL).title(" Input ").border_style(is)),
+        Paragraph::new(format!("{}█", app.input)).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Input ")
+                .border_style(is),
+        ),
         chunks[2],
     );
 
@@ -318,7 +397,9 @@ fn detect_content_label(m: &serde_json::Value) -> String {
             format!("{emoji} sticker")
         }
         "messageDocument" => {
-            let name = m["content"]["document"]["file_name"].as_str().unwrap_or("file");
+            let name = m["content"]["document"]["file_name"]
+                .as_str()
+                .unwrap_or("file");
             format!("📄 {name}")
         }
         "messageVoiceNote" => "🎤 voice".into(),
@@ -329,7 +410,9 @@ fn detect_content_label(m: &serde_json::Value) -> String {
         "messageLocation" => "📍 location".into(),
         "messageContact" => "👤 contact".into(),
         "messagePoll" => {
-            let question = m["content"]["poll"]["question"]["text"].as_str().unwrap_or("poll");
+            let question = m["content"]["poll"]["question"]["text"]
+                .as_str()
+                .unwrap_or("poll");
             format!("📊 {question}")
         }
         "messageCall" => "📞 call".into(),

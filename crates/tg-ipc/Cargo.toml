@@ -13,3 +13,6 @@ serde_json  = { workspace = true }
 anyhow      = { workspace = true }
 uuid        = { workspace = true }
 tracing     = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Security_Authorization", "Win32_Foundation"] }

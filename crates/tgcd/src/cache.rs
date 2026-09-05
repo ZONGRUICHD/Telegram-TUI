@@ -52,16 +52,25 @@ impl Cache {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let url = format!("sqlite:{}?mode=rwc", path.display());
-        let pool = SqlitePoolOptions::new().max_connections(4).connect(&url).await?;
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(4)
+            .connect_with(options)
+            .await?;
         sqlx::query(SCHEMA).execute(&pool).await?;
         info!("SQLite cache opened at {}", path.display());
         Ok(Self { pool })
     }
 
     pub async fn upsert_chat(
-        &self, id: i64, title: &str, kind: &str,
-        last_msg_id: Option<i64>, unread: i32,
+        &self,
+        id: i64,
+        title: &str,
+        kind: &str,
+        last_msg_id: Option<i64>,
+        unread: i32,
     ) -> Result<()> {
         let now = now_unix();
         sqlx::query(
@@ -72,17 +81,29 @@ impl Cache {
                 kind = excluded.kind,
                 last_message_id = COALESCE(excluded.last_message_id, chats.last_message_id),
                 unread_count = excluded.unread_count,
-                updated_at = excluded.updated_at"
+                updated_at = excluded.updated_at",
         )
-        .bind(id).bind(title).bind(kind).bind(last_msg_id).bind(unread).bind(now)
-        .execute(&self.pool).await?;
+        .bind(id)
+        .bind(title)
+        .bind(kind)
+        .bind(last_msg_id)
+        .bind(unread)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
     pub async fn upsert_message(
-        &self, chat_id: i64, msg_id: i64, sender_id: Option<i64>,
-        text: Option<&str>, date: i64, is_outgoing: bool, content_type: &str,
+        &self,
+        chat_id: i64,
+        msg_id: i64,
+        sender_id: Option<i64>,
+        text: Option<&str>,
+        date: i64,
+        is_outgoing: bool,
+        content_type: &str,
         raw: &JsonValue,
     ) -> Result<()> {
         let raw_str = serde_json::to_string(raw)?;
@@ -121,15 +142,21 @@ impl Cache {
     /// Update only last_message_id without touching title or other fields.
     pub async fn update_chat_last_msg(&self, chat_id: i64, msg_id: i64) -> Result<()> {
         let now = now_unix();
-        sqlx::query(
-            "UPDATE chats SET last_message_id = ?, updated_at = ? WHERE id = ?"
-        )
-        .bind(msg_id).bind(now).bind(chat_id)
-        .execute(&self.pool).await?;
+        sqlx::query("UPDATE chats SET last_message_id = ?, updated_at = ? WHERE id = ?")
+            .bind(msg_id)
+            .bind(now)
+            .bind(chat_id)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
-    pub async fn search_messages(&self, chat_id: i64, query: &str, limit: i64) -> Result<Vec<JsonMessage>> {
+    pub async fn search_messages(
+        &self,
+        chat_id: i64,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<JsonMessage>> {
         // Escape LIKE wildcards to prevent injection
         let escaped = query
             .replace('\\', "\\\\")
@@ -153,10 +180,18 @@ impl Cache {
         Ok(result.last_insert_rowid())
     }
 
-    pub async fn update_download_status(&self, id: i64, status: &str, local_path: Option<&str>) -> Result<()> {
+    pub async fn update_download_status(
+        &self,
+        id: i64,
+        status: &str,
+        local_path: Option<&str>,
+    ) -> Result<()> {
         sqlx::query("UPDATE downloads SET status = ?, local_path = ? WHERE id = ?")
-            .bind(status).bind(local_path).bind(id)
-            .execute(&self.pool).await?;
+            .bind(status)
+            .bind(local_path)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 }

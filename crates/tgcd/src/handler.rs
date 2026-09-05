@@ -16,6 +16,7 @@ pub struct AppState {
     #[allow(dead_code)]
     pub cache: Cache,
     pub updates_tx: broadcast::Sender<JsonValue>,
+    pub shutdown_tx: tokio::sync::watch::Sender<bool>,
 }
 
 pub async fn handle_request(req: Request, state: &AppState) -> Response {
@@ -30,7 +31,10 @@ pub async fn handle_request(req: Request, state: &AppState) -> Response {
             id: req.id,
             result: None,
             error: Some(RpcError {
-                code: -1,
+                code: match e.downcast_ref::<tg_core::error::TgError>() {
+                    Some(tg_core::error::TgError::Tdlib { code, .. }) => *code,
+                    _ => -1,
+                },
                 message: e.to_string(),
             }),
         },
@@ -40,8 +44,12 @@ pub async fn handle_request(req: Request, state: &AppState) -> Response {
 async fn dispatch(method: &str, params: &JsonValue, state: &AppState) -> Result<JsonValue> {
     match method {
         methods::GET_STATUS => {
+            let auth = tdlib::query(&state.td, serde_json::json!({"@type":"getAuthorizationState"})).await?;
             Ok(serde_json::json!({
                 "socket": state.config.ipc.socket_path,
+                "authorization": auth,
+                "version": env!("CARGO_PKG_VERSION"),
+                "pid": std::process::id(),
             }))
         }
 
@@ -195,52 +203,52 @@ async fn dispatch(method: &str, params: &JsonValue, state: &AppState) -> Result<
         }
 
         methods::SHUTDOWN => {
-            tracing::warn!("Shutdown rejected — use SIGTERM or `systemctl --user stop tgcd`");
-            Err(anyhow::anyhow!("use SIGTERM or systemctl to stop the daemon"))
+            Ok(serde_json::json!({"status":"stopping"}))
         }
 
         // Auth methods
         methods::AUTH_PHONE => {
             let phone = params["phone"].as_str()
                 .ok_or_else(|| anyhow::anyhow!("missing phone"))?;
-            tdlib::notify(&state.td, serde_json::json!({
+            tdlib::query(&state.td, serde_json::json!({
                 "@type": "setAuthenticationPhoneNumber",
                 "phone_number": phone,
                 "settings": {
                     "@type": "phoneNumberAuthenticationSettings",
                     "is_current_phone_number": true
                 }
-            }));
-            Ok(serde_json::json!({"status": "sent"}))
+            })).await
         }
 
         methods::AUTH_CODE => {
             let code = params["code"].as_str()
                 .ok_or_else(|| anyhow::anyhow!("missing code"))?;
-            tdlib::notify(&state.td, serde_json::json!({
+            tdlib::query(&state.td, serde_json::json!({
                 "@type": "checkAuthenticationCode",
                 "code": code
-            }));
-            Ok(serde_json::json!({"status": "sent"}))
+            })).await
         }
 
         methods::AUTH_PASSWORD => {
             let pw = params["password"].as_str()
                 .ok_or_else(|| anyhow::anyhow!("missing password"))?;
-            tdlib::notify(&state.td, serde_json::json!({
+            tdlib::query(&state.td, serde_json::json!({
                 "@type": "checkAuthenticationPassword",
                 "password": pw
-            }));
-            Ok(serde_json::json!({"status": "sent"}))
+            })).await
         }
 
         // Trigger auth state machine (called by tg login)
         "auth_trigger" => {
-            tdlib::notify(&state.td, serde_json::json!({
+            tdlib::query(&state.td, serde_json::json!({
                 "@type": "getAuthorizationState"
-            }));
-            Ok(serde_json::json!({"status": "triggered"}))
+            })).await
         }
+
+        "auth_email" => tdlib::query(&state.td, serde_json::json!({"@type":"setAuthenticationEmailAddress","email_address":params["email"]})).await,
+        "auth_email_code" => tdlib::query(&state.td, serde_json::json!({"@type":"checkAuthenticationEmailCode","code":{"@type":"emailAddressAuthenticationCode","code":params["code"]}})).await,
+        "auth_resend" => tdlib::query(&state.td, serde_json::json!({"@type":"resendAuthenticationCode","reason":{"@type":"resendCodeReasonUserRequest"}})).await,
+        "auth_qr" => tdlib::query(&state.td, serde_json::json!({"@type":"requestQrCodeAuthentication","other_user_ids":[]})).await,
 
         _ => Err(anyhow::anyhow!("unknown method: {}", method)),
     }

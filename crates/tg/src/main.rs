@@ -13,10 +13,15 @@ use tg_ipc::protocol::methods;
 mod init;
 mod login;
 mod output;
+mod runtime;
 mod tui;
 
 #[derive(Parser)]
-#[command(name = "tg", about = "Telegram CLI — manage chats from your terminal", version)]
+#[command(
+    name = "tg",
+    about = "Telegram CLI — manage chats from your terminal",
+    version
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -64,18 +69,11 @@ enum Commands {
         msg_id: i64,
     },
     /// Delete a message
-    Delete {
-        chat: String,
-        msg_id: i64,
-    },
+    Delete { chat: String, msg_id: i64 },
     /// Download a file
-    Download {
-        file_id: i64,
-    },
+    Download { file_id: i64 },
     /// Mark chat as read
-    Read {
-        chat: String,
-    },
+    Read { chat: String },
     /// Daemon status
     Status,
     /// Log out
@@ -91,20 +89,30 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_env_filter("warn").init();
 
     let cli = Cli::parse();
+    let path = cli
+        .config
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(TgConfig::config_path);
 
     match &cli.command {
-        Commands::Init => { init::run()?; return Ok(()); }
-        Commands::Login => { login::run().await?; return Ok(()); }
-        Commands::Tui => { tui::run().await?; return Ok(()); }
+        Commands::Init => {
+            init::run(&path)?;
+            return Ok(());
+        }
+        Commands::Login => {
+            login::run(&path).await?;
+            return Ok(());
+        }
+        Commands::Tui => {
+            tui::run(TgConfig::load_from(&path)?).await?;
+            return Ok(());
+        }
         _ => {}
     }
 
-    let config = TgConfig::load()?;
+    let config = TgConfig::load_from(&path)?;
     let socket = &config.ipc.socket_path;
-
-    if !socket.exists() {
-        anyhow::bail!("Daemon not running at {}. Start: tgcd", socket.display());
-    }
 
     let mut client = IpcClient::connect(socket).await?;
 
@@ -131,14 +139,8 @@ async fn main() -> Result<()> {
             methods::DELETE_MESSAGE,
             json!({ "chat_id": parse_chat(chat), "message_id": msg_id }),
         ),
-        Commands::Download { file_id } => (
-            methods::DOWNLOAD_FILE,
-            json!({ "file_id": file_id }),
-        ),
-        Commands::Read { chat } => (
-            methods::MARK_READ,
-            json!({ "chat_id": parse_chat(chat) }),
-        ),
+        Commands::Download { file_id } => (methods::DOWNLOAD_FILE, json!({ "file_id": file_id })),
+        Commands::Read { chat } => (methods::MARK_READ, json!({ "chat_id": parse_chat(chat) })),
         Commands::Status => (methods::GET_STATUS, json!({})),
         Commands::Logout => (methods::LOGOUT, json!({})),
         Commands::Stop => {
@@ -165,5 +167,9 @@ async fn main() -> Result<()> {
 }
 
 fn parse_chat(s: &str) -> serde_json::Value {
-    if let Ok(id) = s.parse::<i64>() { json!(id) } else { json!(s) }
+    if let Ok(id) = s.parse::<i64>() {
+        json!(id)
+    } else {
+        json!(s)
+    }
 }

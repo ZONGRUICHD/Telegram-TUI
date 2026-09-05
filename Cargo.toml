@@ -38,7 +38,7 @@ sqlx          = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 # config & secrets
 directories   = "6"
 toml          = "0.8"
-keyring       = { version = "3", features = ["sync-secret-service"] }
+keyring       = { version = "3" }
 # concurrency
 dashmap       = "6"
 uuid          = { version = "1", features = ["v4", "serde"] }

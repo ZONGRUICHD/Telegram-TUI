@@ -29,3 +29,4 @@ keyring       = { workspace = true }
 sqlx          = { workspace = true }
 dashmap       = { workspace = true }
 uuid          = { workspace = true }
+fs2 = "0.4"

@@ -50,3 +50,15 @@
 
 - 第一步：确认工作树初始干净、GitHub 管理权限；仓库更名成功，更新 origin 和安装链接。
 - 尚未进行真实账号登录或发送；不把模拟测试当作 Telegram 服务端验收。
+
+### 第二步：运行基础与登录
+
+- Windows 改用仅对象所有者可访问的本地 named pipe；Unix 继续使用 0600 socket。
+- TDLib 改为运行时加载，编译、CLI 和模拟测试不依赖本机安装 TDLib。`LIBTDJSON_PATH` 指向动态库完整路径。
+- daemon 对 IPC 和 TDLib 数据目录加独占锁，防止重复启动；退出改为 IPC 应答后关闭。
+- `--config` 传入初始化/登录，登录会自动启动相邻目录的 `tgcd`。
+- 密码/验证码隐藏输入，服务端错误通过匹配请求返回，支持手机号、验证码、两步验证、邮箱验证、重发；未注册号码和服务端要求官方购买的状态给出明确提示。
+- 凭据优先级：运行时 `TG_API_ID/TG_API_HASH` → 配置文件 → 构建时 `TG_APP_API_ID/TG_APP_API_HASH`；成对取值，避免错配。未发现仓库已有 Actions secrets，尚不能生成免配置的正式登录包。
+- 本机默认 MSVC 缺少构建工具，安装了独立的 `stable-x86_64-pc-windows-gnu` 工具链进行验证，未修改用户默认工具链。
+- 官方协议基准：TDLib `d1085f9cebc5a62379991ae1652673954f229c1f`；Desktop 参考提交 `80158983dba09d3bf5d96701f21473d6c34bf5f5`。后续发布应固定同一 TDLib 提交，不能沿用旧版 1.8.0。
+- 第二步验证：Windows GNU cargo check、全 workspace 严格 Clippy 通过；IPC 本地往返与请求关联集成测试共 2 项通过。

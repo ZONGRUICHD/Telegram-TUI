@@ -1,7 +1,7 @@
 //! Pretty-print daemon responses.
 
-use serde_json::Value;
 use crate::Commands;
+use serde_json::Value;
 
 pub fn print_result(cmd: &Commands, result: &Value) {
     match cmd {
@@ -25,21 +25,31 @@ pub fn print_result(cmd: &Commands, result: &Value) {
             let path = result["local"]["path"].as_str().unwrap_or("?");
             println!("✅  Downloaded to {path}");
         }
-        Commands::Forward { .. } | Commands::Delete { .. } | Commands::Read { .. }
-        | Commands::Logout | Commands::Stop => println!("✅  Done."),
+        Commands::Forward { .. }
+        | Commands::Delete { .. }
+        | Commands::Read { .. }
+        | Commands::Logout
+        | Commands::Stop => println!("✅  Done."),
         Commands::Init | Commands::Login | Commands::Tui => {}
     }
 }
 
 fn print_dialogs(result: &Value) {
     if let Some(arr) = result.as_array() {
-        if arr.is_empty() { println!("(no chats)"); return; }
+        if arr.is_empty() {
+            println!("(no chats)");
+            return;
+        }
         println!("📋  {} chats:\n", arr.len());
         for (i, item) in arr.iter().enumerate() {
             let title = item["title"].as_str().unwrap_or("?");
             let id = item["id"].as_i64().unwrap_or(0);
             let unread = item["unread_count"].as_i64().unwrap_or(0);
-            let prefix = if unread > 0 { format!("({unread}) ") } else { String::new() };
+            let prefix = if unread > 0 {
+                format!("({unread}) ")
+            } else {
+                String::new()
+            };
             println!("  {:>3}. {prefix}{title}  [{id}]", i + 1);
         }
     } else if let Some(ids) = result.get("chat_ids").and_then(|v| v.as_array()) {
@@ -54,14 +64,19 @@ fn print_dialogs(result: &Value) {
 
 fn print_messages(result: &Value) {
     if let Some(arr) = result.as_array() {
-        if arr.is_empty() { println!("(no messages)"); return; }
+        if arr.is_empty() {
+            println!("(no messages)");
+            return;
+        }
         for m in arr.iter() {
             let id = m["message_id"].as_i64().unwrap_or(0);
-            let sender = m["sender_id"].as_i64()
+            let sender = m["sender_id"]
+                .as_i64()
                 .or_else(|| m["sender_id"]["user_id"].as_i64())
                 .map(|u| format!("user#{u}"))
                 .unwrap_or_else(|| "system".into());
-            let text = m["text"].as_str()
+            let text = m["text"]
+                .as_str()
                 .or_else(|| m["content"]["text"]["text"].as_str())
                 .unwrap_or("[media]");
             let ts = m["date"].as_i64().unwrap_or(0);
@@ -76,14 +91,19 @@ fn print_messages(result: &Value) {
             let sender = if is_out {
                 "Me".to_string()
             } else {
-                m["sender_id"]["user_id"].as_i64()
+                m["sender_id"]["user_id"]
+                    .as_i64()
                     .map(|u| format!("user#{u}"))
                     .unwrap_or_else(|| "system".into())
             };
             let text = m["content"]["text"]["text"]
                 .as_str()
                 .map(|s| s.to_string())
-                .or_else(|| m["content"]["caption"]["text"].as_str().map(|s| s.to_string()))
+                .or_else(|| {
+                    m["content"]["caption"]["text"]
+                        .as_str()
+                        .map(|s| s.to_string())
+                })
                 .unwrap_or_else(|| detect_content_label(m));
             let ts = m["date"].as_i64().unwrap_or(0);
             println!("[{}] {sender} #{id}", fmt_time(ts));
@@ -113,7 +133,9 @@ fn detect_content_label(m: &Value) -> String {
             format!("{emoji} sticker")
         }
         "messageDocument" => {
-            let name = m["content"]["document"]["file_name"].as_str().unwrap_or("file");
+            let name = m["content"]["document"]["file_name"]
+                .as_str()
+                .unwrap_or("file");
             format!("📄 {name}")
         }
         "messageVoiceNote" => "🎤 voice".into(),
