@@ -300,6 +300,9 @@ impl App {
     }
     pub fn choose_list(&mut self, list: String) {
         self.save_draft();
+        if let Some(chat) = self.active {
+            self.request("close_chat", json!({"chat_id":chat}), Job::Draft);
+        }
         self.list = list;
         self.chat_query.clear();
         self.search.clear();
@@ -420,17 +423,30 @@ impl App {
                     }
                     Job::Chats { generation } if generation == self.chat_generation => {
                         let selected = self.active;
-                        self.chats = result["chats"].as_array().cloned().unwrap_or_default();
-                        self.next_chat_offset = result["next_offset"].as_i64();
+                        let mut chats = result["chats"].as_array().cloned().unwrap_or_default();
+                        // A first-page refresh must not discard pages already loaded by the user.
+                        if self.chat_query.is_empty() && chats.len() == 100 {
+                            for chat in &self.chats {
+                                if !chats.iter().any(|c| c["id"] == chat["id"]) {
+                                    chats.push(chat.clone());
+                                }
+                            }
+                            self.next_chat_offset = Some(chats.len() as i64);
+                        } else {
+                            self.next_chat_offset = result["next_offset"].as_i64();
+                        }
+                        self.chats = chats;
                         if let Some(index) =
                             self.chats.iter().position(|c| c["id"].as_i64() == selected)
                         {
                             self.chat_state.select(Some(index));
                         } else if !self.chats.is_empty() {
-                            self.active = None;
                             self.select_chat(0);
                         } else {
                             self.save_draft();
+                            if let Some(chat) = self.active {
+                                self.request("close_chat", json!({"chat_id":chat}), Job::Draft);
+                            }
                             self.active = None;
                             self.messages.clear();
                             self.editor.clear();
@@ -629,9 +645,28 @@ impl App {
                             }
                         }
                     }
-                    "updateChatLastMessage" | "updateChatPosition" | "updateNewChat" => {
-                        self.needs_chat_refresh = true
+                    "updateChatLastMessage" | "updateChatPosition" => {
+                        let list = match self.list.as_str() {
+                            "main" => json!({"@type":"chatListMain"}),
+                            "archive" => json!({"@type":"chatListArchive"}),
+                            id => json!({"@type":"chatListFolder","chat_folder_id":id.parse::<i64>().unwrap_or(0)}),
+                        };
+                        if let Some(chat) = self.chats.iter_mut().find(|c| c["id"] == p["chat_id"]) {
+                            if event.name == "updateChatLastMessage" {
+                                chat["last_message"] = p["last_message"].clone();
+                            }
+                        }
+                        let removed = if event.name == "updateChatPosition" {
+                            p["position"]["list"] == list && p["position"]["order"].as_str() == Some("0")
+                        } else {
+                            p["positions"].as_array().is_some_and(|positions| !positions.iter().any(|pos| pos["list"] == list))
+                        };
+                        if self.chat_query.is_empty() && removed {
+                            self.chats.retain(|c| c["id"] != p["chat_id"]);
+                        }
+                        self.needs_chat_refresh = true;
                     }
+                    "updateNewChat" => self.needs_chat_refresh = true,
                     "updateFile" => {
                         let file = &p["file"];
                         if file["local"]["is_downloading_completed"] == true {

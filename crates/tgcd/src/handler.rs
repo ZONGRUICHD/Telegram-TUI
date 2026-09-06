@@ -24,6 +24,7 @@ pub async fn handle_request(req: Request, state: &AppState) -> Response {
         Err(error) => {
             let (code, message) = match error.downcast_ref::<TgError>() {
                 Some(TgError::Tdlib { code, message }) => (*code, message.clone()),
+                _ if error.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::TimedOut) => (-32001, error.to_string()),
                 _ => (-32602, error.to_string()),
             };
             Response {

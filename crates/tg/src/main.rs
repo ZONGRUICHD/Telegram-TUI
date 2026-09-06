@@ -46,7 +46,7 @@ async fn main() {
         let timeout = error
             .downcast_ref::<std::io::Error>()
             .is_some_and(|e| e.kind() == std::io::ErrorKind::TimedOut);
-        let (kind, exit) = if timeout {
+        let (kind, exit) = if timeout || rpc.is_some_and(|r| r.code == -32001) {
             ("timeout", 4)
         } else if rpc.is_some_and(|r| r.code == 401) {
             ("authentication", 3)
@@ -186,7 +186,7 @@ async fn run(cli: &Cli, machine: bool) -> Result<()> {
     }
     let (method, params) = operation.unwrap();
     let result = tokio::time::timeout(Duration::from_secs(cli.timeout), async {
-        let mut result = client.call(&method, params).await?;
+        let mut result = client.call_with_timeout(&method, params, Duration::from_secs(cli.timeout)).await?;
         if let Commands::Download {
             file_id,
             wait: true,
