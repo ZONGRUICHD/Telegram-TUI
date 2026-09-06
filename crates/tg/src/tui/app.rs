@@ -649,17 +649,23 @@ impl App {
                         let list = match self.list.as_str() {
                             "main" => json!({"@type":"chatListMain"}),
                             "archive" => json!({"@type":"chatListArchive"}),
-                            id => json!({"@type":"chatListFolder","chat_folder_id":id.parse::<i64>().unwrap_or(0)}),
+                            id => {
+                                json!({"@type":"chatListFolder","chat_folder_id":id.parse::<i64>().unwrap_or(0)})
+                            }
                         };
-                        if let Some(chat) = self.chats.iter_mut().find(|c| c["id"] == p["chat_id"]) {
+                        if let Some(chat) = self.chats.iter_mut().find(|c| c["id"] == p["chat_id"])
+                        {
                             if event.name == "updateChatLastMessage" {
                                 chat["last_message"] = p["last_message"].clone();
                             }
                         }
                         let removed = if event.name == "updateChatPosition" {
-                            p["position"]["list"] == list && p["position"]["order"].as_str() == Some("0")
+                            p["position"]["list"] == list
+                                && p["position"]["order"].as_str() == Some("0")
                         } else {
-                            p["positions"].as_array().is_some_and(|positions| !positions.iter().any(|pos| pos["list"] == list))
+                            p["positions"].as_array().is_some_and(|positions| {
+                                !positions.iter().any(|pos| pos["list"] == list)
+                            })
                         };
                         if self.chat_query.is_empty() && removed {
                             self.chats.retain(|c| c["id"] != p["chat_id"]);

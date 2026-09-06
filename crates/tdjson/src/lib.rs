@@ -173,7 +173,11 @@ impl TdClient {
             }
             Err(_) => {
                 get_state().pending.remove(&extra);
-                Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "TDLib 请求超过 30 秒，结果未知；发送操作请先核对历史记录").into())
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "TDLib 请求超过 30 秒，结果未知；发送操作请先核对历史记录",
+                )
+                .into())
             }
         }
     }

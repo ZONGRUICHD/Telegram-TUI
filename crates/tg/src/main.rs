@@ -186,7 +186,9 @@ async fn run(cli: &Cli, machine: bool) -> Result<()> {
     }
     let (method, params) = operation.unwrap();
     let result = tokio::time::timeout(Duration::from_secs(cli.timeout), async {
-        let mut result = client.call_with_timeout(&method, params, Duration::from_secs(cli.timeout)).await?;
+        let mut result = client
+            .call_with_timeout(&method, params, Duration::from_secs(cli.timeout))
+            .await?;
         if let Commands::Download {
             file_id,
             wait: true,

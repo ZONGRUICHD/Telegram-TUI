@@ -39,18 +39,24 @@ impl IpcClient {
 
     /// Send a request and wait for the matching response (by UUID).
     pub async fn call(&mut self, method: &str, params: JsonValue) -> Result<JsonValue> {
-        self.call_with_timeout(method, params, std::time::Duration::from_secs(35)).await
+        self.call_with_timeout(method, params, std::time::Duration::from_secs(35))
+            .await
     }
 
-    pub async fn call_with_timeout(&mut self, method: &str, params: JsonValue, timeout: std::time::Duration) -> Result<JsonValue> {
-        tokio::time::timeout(
-            timeout,
-            self.call_inner(method, params),
-        )
-        .await
-        .map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::TimedOut, "IPC 请求超时，结果未知；发送操作请先核对历史记录，勿自动重试")
-        })?
+    pub async fn call_with_timeout(
+        &mut self,
+        method: &str,
+        params: JsonValue,
+        timeout: std::time::Duration,
+    ) -> Result<JsonValue> {
+        tokio::time::timeout(timeout, self.call_inner(method, params))
+            .await
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "IPC 请求超时，结果未知；发送操作请先核对历史记录，勿自动重试",
+                )
+            })?
     }
 
     async fn call_inner(&mut self, method: &str, params: JsonValue) -> Result<JsonValue> {
