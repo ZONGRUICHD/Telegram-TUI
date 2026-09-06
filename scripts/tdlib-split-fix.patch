@@ -1,0 +1,6 @@
+diff --git a/SplitSource.php b/SplitSource.php
+--- a/SplitSource.php
++++ b/SplitSource.php
+@@ -384,1 +384,1 @@
+-            'MessageContentUploadId' => 'MessageContentUploadId'
++            'MessageContentUploadId' => 'MessageContentUploadId',

@@ -7,7 +7,7 @@
 - 官方仓库：https://github.com/tdlib/td
 - 许可证：Boost Software License 1.0；发行包附带 TDLib-LICENSE.txt。
 - 本项目固定的源码版本见 TDLIB_COMMIT，打包后实际版本见 TDLIB-BUILD.json。
-- 协议实现由 TDLib 提供。本项目通过 JSON 接口调用，不修改 TDLib 源码；Linux 构建可使用官方 SplitSource.php 降低内存需求。
+- 协议实现由 TDLib 提供，本项目通过 JSON 接口调用。Linux 构建使用官方 SplitSource.php 降低内存需求；scripts/tdlib-split-fix.patch 修正该提交脚本中缺失的逗号，不改动协议或运行逻辑。发行包保留此补丁和来源说明。
 
 ## 原生库依赖
 

@@ -70,6 +70,7 @@ jobs:
       - name: 编译 TDLib（Linux）
         if: runner.os == 'Linux' && steps.native-cache.outputs.cache-hit != 'true'
         run: |
+          git -C td-source apply --unidiff-zero ../scripts/tdlib-split-fix.patch
           (cd td-source && php SplitSource.php)
           cmake -S td-source -B td-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_LTO=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5
           cmake --build td-build --target tdjson --parallel 2
