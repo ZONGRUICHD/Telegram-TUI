@@ -213,7 +213,14 @@ pub enum Commands {
     /// 检查配置、应用身份是否可用和服务连接（不泄漏凭据）
     Doctor,
     /// 启动终端界面
-    Tui,
+    Tui {
+        /// 使用虚构数据离线体验，不连接 Telegram
+        #[arg(long)]
+        demo: bool,
+        /// 导出演示终端画面，便于无终端环境验收
+        #[arg(long, requires = "demo")]
+        snapshot: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]

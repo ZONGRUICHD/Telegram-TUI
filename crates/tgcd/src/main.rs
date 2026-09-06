@@ -1,5 +1,4 @@
 //! Owns one TDLib session and serves local CLI / TUI clients.
-mod cache;
 mod dispatcher;
 mod handler;
 mod ipc;
@@ -55,6 +54,8 @@ async fn main() -> Result<()> {
     tg_tdjson::set_log_verbosity(config.tdlib.verbosity);
     let (updates_tx, updates_rx) = broadcast::channel(4096);
     tg_tdjson::init(updates_tx.clone());
+    let snapshot = std::sync::Arc::new(std::sync::RwLock::new(dispatcher::Snapshot::default()));
+    let snapshot_task = tokio::spawn(dispatcher::run(updates_rx, snapshot.clone()));
     let td = tg_tdjson::TdClient::new();
     let auth = tdlib::query(&td, serde_json::json!({"@type":"getAuthorizationState"})).await?;
     if auth["@type"] == "authorizationStateWaitTdlibParameters" {
@@ -95,25 +96,17 @@ async fn main() -> Result<()> {
             "proxy":{"@type":"proxy","server":config.proxy.host,"port":config.proxy.port,"type":kind},
             "enable":true,"comment":"Telegram-TUI"})).await?;
     }
-    let cache = cache::Cache::new(&config.database_path()).await?;
-    let snapshot = std::sync::Arc::new(std::sync::RwLock::new(dispatcher::Snapshot::default()));
-    let cache_task = tokio::spawn(dispatcher::run_cache_updater(
-        cache.clone(),
-        updates_rx,
-        snapshot.clone(),
-    ));
     let (shutdown_tx, _) = watch::channel(false);
     let state = handler::AppState {
         config: config.clone(),
         td: td.clone(),
-        cache,
         updates_tx,
         shutdown_tx,
         snapshot,
     };
     let result = ipc::run(&config.ipc.socket_path, state).await;
     let _ = tdlib::query(&td, serde_json::json!({"@type":"close"})).await;
-    cache_task.abort();
+    snapshot_task.abort();
     drop(db_lock);
     drop(lock);
     result

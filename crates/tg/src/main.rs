@@ -67,7 +67,11 @@ async fn main() {
 
 async fn run(cli: &Cli, machine: bool) -> Result<()> {
     let path = cli.config.clone().unwrap_or_else(TgConfig::config_path);
-    let cmd = cli.command.as_ref().unwrap_or(&Commands::Tui);
+    let default = Commands::Tui {
+        demo: false,
+        snapshot: None,
+    };
+    let cmd = cli.command.as_ref().unwrap_or(&default);
     match cmd {
         Commands::Schema => return output::success(&schema(), true),
         Commands::Init => {
@@ -82,8 +86,14 @@ async fn run(cli: &Cli, machine: bool) -> Result<()> {
             login::run(&path).await?;
             return output::success(&json!({"authorized":true}), machine);
         }
-        Commands::Tui => {
+        Commands::Tui { demo, snapshot } => {
             anyhow::ensure!(!cli.dry_run, "tui 不支持 --dry-run");
+            if let Some(snapshot) = snapshot {
+                return tui::snapshot(snapshot, 120, 36);
+            }
+            if *demo {
+                return tui::run(TgConfig::default(), true).await;
+            }
             anyhow::ensure!(
                 std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
                 "TUI 需要终端；AI 请使用 tg schema 查询 CLI"
@@ -93,7 +103,7 @@ async fn run(cli: &Cli, machine: bool) -> Result<()> {
             }
             let config = TgConfig::load_from(&path)?;
             runtime::ensure_daemon(&config, &path).await?;
-            return tui::run(config).await;
+            return tui::run(config, false).await;
         }
         Commands::Doctor => {
             let config = TgConfig::load_from(&path)?;

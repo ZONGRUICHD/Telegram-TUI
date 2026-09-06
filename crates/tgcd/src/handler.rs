@@ -1,5 +1,5 @@
 //! Validated RPC operations. Read operations never mark chats as read.
-use crate::{cache::Cache, tdlib};
+use crate::tdlib;
 use anyhow::{anyhow, bail, ensure, Result};
 use serde_json::{json, Value};
 use tg_core::{config::TgConfig, error::TgError};
@@ -9,8 +9,6 @@ use tokio::sync::{broadcast, watch};
 pub struct AppState {
     pub config: TgConfig,
     pub td: tg_tdjson::TdClient,
-    #[allow(dead_code)]
-    pub cache: Cache,
     pub updates_tx: broadcast::Sender<Value>,
     pub shutdown_tx: watch::Sender<bool>,
     pub snapshot: std::sync::Arc<std::sync::RwLock<crate::dispatcher::Snapshot>>,
@@ -237,6 +235,7 @@ async fn dispatch(method: &str, mut p: Value, state: &AppState) -> Result<Value>
             if cursor > 0 {
                 messages.retain(|m| m["id"].as_i64().unwrap_or(0) < cursor);
             }
+            messages.truncate(bounded(&p, "limit", 50, 1, 100)? as usize);
             messages.sort_by_key(|m| std::cmp::Reverse(m["id"].as_i64().unwrap_or(0)));
             let snapshot = state.snapshot.read().unwrap();
             for message in messages.iter_mut() {
@@ -297,6 +296,16 @@ fn chat_list(p: &Value) -> Result<Value> {
 fn formatted(text: &str) -> Value {
     json!({"@type":"formattedText","text":text,"entities":[]})
 }
+fn history_limit(p: &Value) -> Result<i64> {
+    let requested = bounded(p, "limit", 50, 1, 100)?;
+    Ok((requested
+        + if p["from_message_id"].as_i64().unwrap_or(0) > 0 {
+            1
+        } else {
+            0
+        })
+    .min(100))
+}
 fn text_content(p: &Value) -> Result<Value> {
     let text = required_str(p, "text")?;
     ensure!(
@@ -333,13 +342,20 @@ pub fn build_query(method: &str, p: &Value) -> Result<Value> {
         "get_message" => {
             json!({"@type":"getMessage","chat_id":chat()?,"message_id":required_id(p,"message_id")?})
         }
-        "get_messages" => json!({"@type":"getChatHistory","chat_id":chat()?,
+        "get_messages" => {
+            if let Some(topic) = p["topic"].as_i64().filter(|id| *id > 0) {
+                json!({"@type":"getForumTopicHistory","chat_id":chat()?,"forum_topic_id":topic,
+                "from_message_id":bounded(p,"from_message_id",0,0,i64::MAX)?,"offset":0,"limit":history_limit(p)?})
+            } else {
+                json!({"@type":"getChatHistory","chat_id":chat()?,
             "from_message_id":bounded(p,"from_message_id",0,0,i64::MAX)?,"offset":0,
-            "limit":bounded(p,"limit",50,1,100)?,"only_local":false}),
+            "limit":history_limit(p)?,"only_local":false})
+            }
+        }
         "search" => {
             json!({"@type":"searchChatMessages","chat_id":chat()?,"query":required_str(p,"query")?,
             "from_message_id":bounded(p,"from_message_id",0,0,i64::MAX)?,"offset":0,
-            "limit":bounded(p,"limit",50,1,100)?,"filter":{"@type":"searchMessagesFilterEmpty"}})
+            "limit":history_limit(p)?,"topic_id":p["topic"].as_i64().filter(|id|*id>0).map(|id|json!({"@type":"messageTopicForum","forum_topic_id":id})),"filter":{"@type":"searchMessagesFilterEmpty"}})
         }
         "send_message" | "send_file" => {
             let content = if method == "send_message" {
@@ -405,7 +421,7 @@ pub fn build_query(method: &str, p: &Value) -> Result<Value> {
             json!({"@type":"addChatToList","chat_id":chat()?,"chat_list":if p["archived"].as_bool().unwrap_or(true) {json!({"@type":"chatListArchive"})} else {json!({"@type":"chatListMain"})}})
         }
         "draft" => {
-            json!({"@type":"setChatDraftMessage","chat_id":chat()?,"draft_message": if p["text"].as_str().unwrap_or("").is_empty() { Value::Null } else {
+            json!({"@type":"setChatDraftMessage","chat_id":chat()?,"topic_id":p["topic"].as_i64().filter(|id|*id>0).map(|id|json!({"@type":"messageTopicForum","forum_topic_id":id})),"draft_message": if p["text"].as_str().unwrap_or("").is_empty() { Value::Null } else {
                 json!({"@type":"draftMessage","content":{"@type":"draftMessageContentText","text":formatted(p["text"].as_str().unwrap_or(""))}})
             }})
         }
@@ -441,6 +457,14 @@ mod tests {
     }
     #[test]
     fn validates_history_and_preserves_cursor() {
+        assert_eq!(
+            build_query(
+                "get_messages",
+                &json!({"chat_id":1,"limit":1,"from_message_id":123})
+            )
+            .unwrap()["limit"],
+            2
+        );
         assert!(build_query("get_messages", &json!({"chat_id":-1,"limit":200})).is_err());
         assert!(build_query("get_messages", &json!({"chat_id":-1,"limit":0})).is_err());
         assert_eq!(

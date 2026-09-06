@@ -26,7 +26,6 @@ clap          = { workspace = true }
 directories   = { workspace = true }
 toml          = { workspace = true }
 keyring       = { workspace = true }
-sqlx          = { workspace = true }
 dashmap       = { workspace = true }
 uuid          = { workspace = true }
 fs2 = "0.4"

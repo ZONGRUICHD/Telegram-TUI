@@ -103,11 +103,6 @@ pub fn message_text(m: &Value) -> String {
         ),
         other => format!("[{}]", other.strip_prefix("message").unwrap_or(other)),
     };
-    let label = if let Some(id) = file_id(m) {
-        format!("{label} · 文件 ID {id}")
-    } else {
-        label
-    };
     safe(&if caption.is_empty() {
         label
     } else {
