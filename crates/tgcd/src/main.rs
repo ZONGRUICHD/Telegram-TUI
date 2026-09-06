@@ -14,6 +14,9 @@ use tokio::sync::{broadcast, watch};
 struct Args {
     #[arg(short, long)]
     config: Option<std::path::PathBuf>,
+    /// 离线检查动态库和协议版本，不读取账号配置、不连接 Telegram
+    #[arg(long)]
+    check_library: bool,
 }
 
 #[tokio::main]
@@ -25,6 +28,20 @@ async fn main() -> Result<()> {
         )
         .init();
     let args = Args::parse();
+    if args.check_library {
+        tg_tdjson::load_library()?;
+        let version = tg_tdjson::execute(r#"{"@type":"getOption","name":"version"}"#)
+            .context("TDLib 未返回版本")?;
+        let commit = tg_tdjson::execute(r#"{"@type":"getOption","name":"commit_hash"}"#)
+            .context("TDLib 未返回源码版本")?;
+        let version: serde_json::Value = serde_json::from_str(&version)?;
+        let commit: serde_json::Value = serde_json::from_str(&commit)?;
+        println!(
+            "{}",
+            serde_json::json!({"version":version["value"],"commit":commit["value"],"expected_commit":include_str!("../../../TDLIB_COMMIT").trim()})
+        );
+        return Ok(());
+    }
     let config = TgConfig::load_from(&args.config.unwrap_or_else(TgConfig::config_path))?;
     let (api_id, api_hash) = config.application_credentials()?;
     std::fs::create_dir_all(&config.tdlib.database_directory)?;
@@ -105,7 +122,20 @@ async fn main() -> Result<()> {
         snapshot,
     };
     let result = ipc::run(&config.ipc.socket_path, state).await;
-    let _ = tdlib::query(&td, serde_json::json!({"@type":"close"})).await;
+    let mut closing_updates = tg_tdjson::subscribe_updates();
+    if tdlib::query(&td, serde_json::json!({"@type":"close"}))
+        .await
+        .is_ok()
+    {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            while let Ok(update) = closing_updates.recv().await {
+                if update["authorization_state"]["@type"] == "authorizationStateClosed" {
+                    break;
+                }
+            }
+        })
+        .await;
+    }
     snapshot_task.abort();
     drop(db_lock);
     drop(lock);

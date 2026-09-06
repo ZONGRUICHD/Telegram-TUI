@@ -109,8 +109,23 @@ async fn run(cli: &Cli, machine: bool) -> Result<()> {
             let config = TgConfig::load_from(&path)?;
             let available = config.application_credentials().is_ok();
             let daemon = IpcClient::connect(&config.ipc.socket_path).await.is_ok();
+            let executable = std::env::current_exe()?.with_file_name(if cfg!(windows) {
+                "tgcd.exe"
+            } else {
+                "tgcd"
+            });
+            let library=tokio::task::spawn_blocking(move || {
+                let mut command=std::process::Command::new(executable);
+                command.arg("--check-library");
+                #[cfg(windows)] {use std::os::windows::process::CommandExt;command.creation_flags(0x08000000);}
+                match command.output() {
+                    Ok(output) if output.status.success()=>serde_json::from_slice::<Value>(&output.stdout).unwrap_or(json!({"available":false})),
+                    Ok(output)=>json!({"available":false,"diagnostic":String::from_utf8_lossy(&output.stderr)}),
+                    Err(error)=>json!({"available":false,"diagnostic":error.to_string()}),
+                }
+            }).await?;
             return output::success(
-                &json!({"config":path,"application_identity_available":available,
+                &json!({"config":path,"application_identity_available":available,"tdlib":library,
                 "daemon_connected":daemon,"endpoint":config.ipc.socket_path,
                 "library_override_set":std::env::var_os("LIBTDJSON_PATH").is_some()}),
                 machine,

@@ -1051,7 +1051,7 @@ dependencies = [
 
 [[package]]
 name = "tg"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1078,7 +1078,7 @@ dependencies = [
 
 [[package]]
 name = "tg-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "directories",
@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "tg-ipc"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1108,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "tg-tdjson"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -1121,7 +1121,7 @@ dependencies = [
 
 [[package]]
 name = "tgcd"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytes",
