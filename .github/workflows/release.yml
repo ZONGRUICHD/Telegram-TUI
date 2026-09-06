@@ -95,7 +95,7 @@ jobs:
         shell: pwsh
         run: |
           $gperf = (Get-Command gperf.exe -ErrorAction Stop).Source
-          cmake -S td-source -B td-build -A x64 "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows "-DGPERF_EXECUTABLE=$gperf" -DTD_ENABLE_LTO=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake -S td-source -B td-build -A x64 "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" "-DVCPKG_TARGET_TRIPLET=x64-windows" "-DGPERF_EXECUTABLE=$gperf" "-DTD_ENABLE_LTO=OFF" "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
           if ($LASTEXITCODE -ne 0) { throw "CMake 配置失败" }
           cmake --build td-build --config Release --target tdjson --parallel 2
           if ($LASTEXITCODE -ne 0) { throw "TDLib 编译失败" }

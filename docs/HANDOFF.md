@@ -81,3 +81,9 @@
 - 预览见 [TUI 画面](images/tui-demo.svg)，已在浏览器检查实际渲染。测试覆盖 30×10 至 160×48，修复 42×12 登录页越界。
 - 移除未被查询使用且存在旧消息残留风险的第二份 SQLite 缓存；聊天持久化统一由 TDLib 管理，内存仅维护用户、文件夹和连接状态。旧缓存文件不自动删除。
 - 第四步本机共 23 项测试和严格 Clippy 通过；未进行真实账号收发验收。
+
+### 第五步：发行包流水线
+
+- 三平台原生编译 TDLib 固定提交并缓存，包内用 `tgcd --check-library` 验证动态库可加载且版本一致。
+- 修复 Windows 任务失败：pwsh 会把裸参数 `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` 拆成 `=3` 与 `.5` 两个参数（PowerShell 将 `.5` 视作独立数字字面量），CMake 收到非法策略值后在 vcpkg 工具链的 `cmake_policy` 处报错；为全部 `-D` 参数加引号解决。
+- Linux .deb 暂保留 `telegram-cli` 包名与文档目录，避免升级路径断裂。
