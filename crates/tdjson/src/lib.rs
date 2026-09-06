@@ -16,44 +16,37 @@
 //! ```
 
 use std::ffi::{CStr, CString};
-use std::os::raw::{c_char, c_double, c_int};
+use std::os::raw::c_int;
 use std::sync::Arc;
 
 use dashmap::DashMap;
 use serde_json::Value as JsonValue;
 use tokio::sync::{broadcast, oneshot};
 use tracing::warn;
+mod library;
+pub use library::load as load_library;
 
 // ── FFI declarations ───────────────────────────────────────────────
-
-#[cfg_attr(
-    all(not(target_env = "msvc"), not(target_os = "macos")),
-    link(name = "tdjson")
-)]
-extern "C" {
-    fn td_create_client_id() -> c_int;
-    fn td_send(client_id: c_int, request: *const c_char);
-    fn td_receive(timeout: c_double) -> *const c_char;
-    fn td_execute(request: *const c_char) -> *const c_char;
-
-    fn td_set_log_verbosity_level(level: c_int);
-}
 
 // ── Low-level helpers ──────────────────────────────────────────────
 
 /// Set TDLib log verbosity. Call once at startup.
 pub fn set_log_verbosity(level: i32) {
-    unsafe { td_set_log_verbosity_level(level) }
+    unsafe { (library::api().verbosity)(level) }
 }
 
 /// Execute a synchronous TDLib function (rarely used).
 pub fn execute(query: &str) -> Option<String> {
     let c = CString::new(query).ok()?;
-    let ptr = unsafe { td_execute(c.as_ptr()) };
+    let ptr = unsafe { (library::api().execute)(c.as_ptr()) };
     if ptr.is_null() {
         None
     } else {
-        Some(unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned())
+        Some(
+            unsafe { CStr::from_ptr(ptr) }
+                .to_string_lossy()
+                .into_owned(),
+        )
     }
 }
 
@@ -98,7 +91,7 @@ fn get_state() -> &'static Arc<ReceiveState> {
 fn receive_loop(state: Arc<ReceiveState>) {
     tracing::info!("TDLib receive loop started");
     loop {
-        let ptr = unsafe { td_receive(1.0) };
+        let ptr = unsafe { (library::api().receive)(1.0) };
         if ptr.is_null() {
             continue; // timeout
         }
@@ -119,7 +112,11 @@ fn receive_loop(state: Arc<ReceiveState>) {
         let extra_key = val
             .get("@extra")
             .and_then(|v| v.as_str().map(String::from))
-            .or_else(|| val.get("@extra").and_then(|v| v.as_i64()).map(|n| n.to_string()));
+            .or_else(|| {
+                val.get("@extra")
+                    .and_then(|v| v.as_i64())
+                    .map(|n| n.to_string())
+            });
 
         if let Some(ref extra) = extra_key {
             if let Some((_, sender)) = state.pending.remove(extra) {
@@ -151,7 +148,7 @@ impl TdClient {
     /// Create a new TDLib client (calls `td_create_client_id`).
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        let client_id = unsafe { td_create_client_id() };
+        let client_id = unsafe { (library::api().create)() };
         Self { client_id }
     }
 
@@ -163,9 +160,10 @@ impl TdClient {
 
         let (tx, rx) = oneshot::channel();
         get_state().pending.insert(extra.clone(), tx);
+        let _pending = PendingRequest(extra.clone());
 
         let c_query = CString::new(query.to_string())?;
-        unsafe { td_send(self.client_id, c_query.as_ptr()) }
+        unsafe { (library::api().send)(self.client_id, c_query.as_ptr()) }
 
         match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
             Ok(Ok(resp)) => Ok(resp),
@@ -175,7 +173,11 @@ impl TdClient {
             }
             Err(_) => {
                 get_state().pending.remove(&extra);
-                anyhow::bail!("TDLib request timed out after 30s for @extra={extra}")
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "TDLib 请求超过 30 秒，结果未知；发送操作请先核对历史记录",
+                )
+                .into())
             }
         }
     }
@@ -186,7 +188,7 @@ impl TdClient {
             Ok(c) => c,
             Err(_) => return,
         };
-        unsafe { td_send(self.client_id, c_query.as_ptr()) }
+        unsafe { (library::api().send)(self.client_id, c_query.as_ptr()) }
     }
 
     /// Get the raw client_id.
@@ -200,4 +202,11 @@ impl TdClient {
 /// Subscribe to the global update broadcast channel.
 pub fn subscribe_updates() -> broadcast::Receiver<JsonValue> {
     get_state().updates_tx.subscribe()
+}
+
+struct PendingRequest(String);
+impl Drop for PendingRequest {
+    fn drop(&mut self) {
+        get_state().pending.remove(&self.0);
+    }
 }

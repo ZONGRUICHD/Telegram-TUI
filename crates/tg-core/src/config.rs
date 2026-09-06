@@ -21,7 +21,9 @@ pub struct TgConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TelegramConfig {
+    #[serde(default)]
     pub api_id: i32,
+    #[serde(default)]
     pub api_hash: String,
     #[serde(default)]
     pub phone: String,
@@ -95,10 +97,18 @@ fn default_tdlib_files_dir() -> PathBuf {
 }
 
 fn default_socket_path() -> PathBuf {
-    let runtime = std::env::var("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"));
-    runtime.join("tg").join("tgcd.sock")
+    #[cfg(windows)]
+    return project_dirs()
+        .data_local_dir()
+        .join("runtime")
+        .join("tgcd.sock");
+    #[cfg(unix)]
+    {
+        let runtime = std::env::var("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| project_dirs().data_local_dir().join("runtime"));
+        runtime.join("tg").join("tgcd.sock")
+    }
 }
 
 fn default_true() -> bool {
@@ -108,7 +118,7 @@ fn default_lang() -> String {
     "en".into()
 }
 fn default_device() -> String {
-    "Telegram-CLI".into()
+    "Telegram-TUI".into()
 }
 fn default_proxy_kind() -> String {
     "socks5".into()
@@ -154,13 +164,18 @@ impl Default for ProxyConfig {
 
 impl Default for TuiConfig {
     fn default() -> Self {
-        Self { enable_mouse: true, message_page_size: default_page_size() }
+        Self {
+            enable_mouse: true,
+            message_page_size: default_page_size(),
+        }
     }
 }
 
 impl Default for IpcConfig {
     fn default() -> Self {
-        Self { socket_path: default_socket_path() }
+        Self {
+            socket_path: default_socket_path(),
+        }
     }
 }
 
@@ -174,9 +189,12 @@ impl TgConfig {
     }
 
     pub fn load() -> Result<Self, TgError> {
-        let path = Self::config_path();
+        Self::load_from(&Self::config_path())
+    }
+
+    pub fn load_from(path: &std::path::Path) -> Result<Self, TgError> {
         if path.exists() {
-            let content = std::fs::read_to_string(&path)?;
+            let content = std::fs::read_to_string(path)?;
             Ok(toml::from_str(&content)?)
         } else {
             Err(TgError::Config(format!(
@@ -187,24 +205,27 @@ impl TgConfig {
     }
 
     pub fn save(&self) -> Result<(), TgError> {
-        let path = Self::config_path();
+        self.save_to(&Self::config_path())
+    }
+
+    pub fn save_to(&self, path: &std::path::Path) -> Result<(), TgError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&path, toml::to_string_pretty(self)?)?;
+        std::fs::write(path, toml::to_string_pretty(self)?)?;
 
         // Restrict config file to owner only (may contain API secrets)
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
         }
 
         Ok(())
     }
 
     pub fn database_path(&self) -> PathBuf {
-        project_dirs().data_dir().join("tg.db")
+        self.tdlib.database_directory.join("tui-cache.db")
     }
 
     pub fn store_keyring(&self) -> Result<(), TgError> {
@@ -215,11 +236,42 @@ impl TgConfig {
     }
 
     pub fn load_api_hash(&self) -> String {
+        if !self.telegram.api_hash.is_empty() {
+            return self.telegram.api_hash.clone();
+        }
         if let Ok(entry) = keyring::Entry::new("tg-cli", "api_hash") {
             if let Ok(val) = entry.get_password() {
                 return val;
             }
         }
         self.telegram.api_hash.clone()
+    }
+
+    /// Application identity is supplied by the distributor, separately from user login.
+    /// Never mix the ID from one source with the hash from another source.
+    pub fn application_credentials(&self) -> Result<(i32, String), TgError> {
+        let runtime_id = std::env::var("TG_API_ID").ok();
+        let runtime_hash = std::env::var("TG_API_HASH").ok();
+        let (id, hash) = if runtime_id.is_some() || runtime_hash.is_some() {
+            (
+                runtime_id.and_then(|v| v.parse().ok()).unwrap_or(0),
+                runtime_hash.unwrap_or_default(),
+            )
+        } else if self.telegram.api_id != 0 || !self.telegram.api_hash.is_empty() {
+            (self.telegram.api_id, self.load_api_hash())
+        } else {
+            (
+                option_env!("TG_APP_API_ID")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0),
+                option_env!("TG_APP_API_HASH")
+                    .unwrap_or_default()
+                    .to_owned(),
+            )
+        };
+        if id <= 0 || hash.len() != 32 || !hash.bytes().all(|c| c.is_ascii_hexdigit()) {
+            return Err(TgError::Config("此构建未配置 Telegram 应用身份。维护者需设置 TG_APP_API_ID / TG_APP_API_HASH 后重新构建；源码开发可设置 TG_API_ID / TG_API_HASH。用户登录仍使用手机号和验证码。".into()));
+        }
+        Ok((id, hash))
     }
 }

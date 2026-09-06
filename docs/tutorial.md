@@ -1,4 +1,4 @@
-# Telegram-CLI 使用教程
+# Telegram-TUI 使用教程
 
 > TDLib + Rust 常驻 Daemon + CLI/TUI 前端的完整终端 Telegram 客户端
 
@@ -25,7 +25,7 @@
 
 ## 一、项目简介
 
-Telegram-CLI 是一个运行在终端里的 Telegram 客户端，架构如下：
+Telegram-TUI 是一个运行在终端里的 Telegram 客户端，架构如下：
 
 ```text
 tg (CLI) / tg tui (终端界面)
@@ -58,8 +58,8 @@ Telegram Cloud + 本地 TDLib 数据库 + SQLite 消息缓存
 ### 2.1 一键安装（推荐）
 
 ```bash
-git clone https://github.com/zong1024/Telegram-CLI.git
-cd Telegram-CLI
+git clone https://github.com/ZONGRUICHD/Telegram-TUI.git
+cd Telegram-TUI
 ./scripts/install.sh
 ```
 
@@ -488,7 +488,7 @@ files_directory = "~/.local/share/tg/tdlib/files"
 use_message_database = true     # 使用消息数据库（推荐）
 use_secret_chats = false        # 秘密聊天
 system_language_code = "zh"     # 语言
-device_model = "Telegram-CLI"   # 设备名
+device_model = "Telegram-TUI"   # 设备名
 verbosity = 0                   # 日志级别 (0=静默, 1=警告, 2=信息, 3+=调试)
 test = false                    # 使用测试服务器
 
@@ -568,7 +568,7 @@ tgcd -c /path/to/config.toml
 ### 更新
 
 ```bash
-cd Telegram-CLI
+cd Telegram-TUI
 git pull
 ./scripts/install.sh
 systemctl --user restart tgcd
@@ -701,7 +701,7 @@ journalctl --user -u tgcd -f
 
 ### Q: 如何在多台机器上使用同一个账号？
 
-每台机器独立安装 Telegram-CLI，分别 `tg login`。Telegram 允许同一账号在多个设备上同时登录。
+每台机器独立安装 Telegram-TUI，分别 `tg login`。Telegram 允许同一账号在多个设备上同时登录。
 
 ### Q: 如何切换账号？
 

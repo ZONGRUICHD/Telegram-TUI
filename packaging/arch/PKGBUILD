@@ -4,14 +4,14 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc="TDLib + Rust daemon + TUI/CLI — a full-featured Telegram client for the terminal"
 arch=('x86_64' 'aarch64')
-url="https://github.com/zong1024/Telegram-CLI"
+url="https://github.com/ZONGRUICHD/Telegram-TUI"
 license=('MIT')
 depends=('tdlib' 'gcc-libs')
 makedepends=('cargo' 'cmake' 'git')
 optdepends=(
     'systemd: for tgcd user service'
 )
-source=("$pkgname-$pkgver.tar.gz::https://github.com/zong1024/Telegram-CLI/archive/v$pkgver.tar.gz")
+source=("$pkgname-$pkgver.tar.gz::https://github.com/ZONGRUICHD/Telegram-TUI/archive/v$pkgver.tar.gz")
 sha256sums=('SKIP')
 
 prepare() {

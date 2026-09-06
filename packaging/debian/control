@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: zong1024 <zong1024@gmail.com>
 Build-Depends: debhelper (>= 12), cargo, cmake, libtd-dev, pkg-config
 Standards-Version: 4.6.0
-Homepage: https://github.com/zong1024/Telegram-CLI
+Homepage: https://github.com/ZONGRUICHD/Telegram-TUI
 
 Package: telegram-cli
 Architecture: any

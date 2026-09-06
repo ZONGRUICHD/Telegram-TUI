@@ -1,341 +1,275 @@
-//! `tg tui` — ratatui terminal interface.
-
-use std::io;
-use std::time::{Duration, Instant};
-
+//! Responsive terminal client with isolated state, rendering and transport.
+mod app;
+mod demo;
+mod editor;
+#[cfg(test)]
+mod tests;
+mod view;
 use anyhow::Result;
+use app::{App, Focus, Job};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{
+        DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+        EnableFocusChange, EnableMouseCapture, Event, EventStream, KeyEventKind, MouseButton,
+        MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use futures_util::StreamExt;
 use ratatui::{
-    backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
-    Frame, Terminal,
+    backend::{CrosstermBackend, TestBackend},
+    Terminal,
 };
-use tokio::sync::mpsc;
-
+use serde_json::json;
+use std::{
+    io::{self, IsTerminal},
+    path::Path,
+    time::{Duration, Instant},
+};
 use tg_core::config::TgConfig;
-use tg_ipc::client::{IpcClient, IpcWriter};
-use tg_ipc::protocol::{methods, ServerMessage};
+use tg_ipc::client::IpcClient;
 
-#[derive(PartialEq)]
-enum Focus { Dialogs, Input }
-
-struct App {
-    dialogs: Vec<(i64, String, i32)>,
-    selected: usize,
-    messages: Vec<(i64, String, String, String)>, // (id, sender, text, time)
-    input: String,
-    focus: Focus,
-    status: String,
-    running: bool,
-}
-
-impl App {
-    fn new() -> Self {
-        Self {
-            dialogs: Vec::new(),
-            selected: 0,
-            messages: Vec::new(),
-            input: String::new(),
-            focus: Focus::Dialogs,
-            status: "Starting…".into(),
-            running: true,
+struct TerminalGuard;
+impl TerminalGuard {
+    fn enter(mouse: bool) -> Result<Self> {
+        enable_raw_mode()?;
+        let guard = Self;
+        execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            EnableBracketedPaste,
+            EnableFocusChange
+        )?;
+        if mouse {
+            execute!(io::stdout(), EnableMouseCapture)?;
         }
+        Ok(guard)
     }
-    fn current_chat(&self) -> Option<i64> {
-        self.dialogs.get(self.selected).map(|(id, _, _)| *id)
+}
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            io::stdout(),
+            DisableMouseCapture,
+            DisableBracketedPaste,
+            DisableFocusChange,
+            LeaveAlternateScreen,
+            crossterm::cursor::Show
+        );
     }
 }
 
-pub async fn run() -> Result<()> {
-    let config = TgConfig::load()?;
-    let socket = &config.ipc.socket_path;
-    if !socket.exists() {
-        eprintln!("❌  Daemon not running. Start: tgcd");
-        std::process::exit(1);
-    }
-
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    let client = IpcClient::connect(socket).await?;
-    let (mut writer, mut reader) = client.split();
-
-    // Background task: read all server messages and forward to UI
-    let (msg_tx, mut msg_rx) = mpsc::channel::<ServerMessage>(128);
-    tokio::spawn(async move {
-        while let Ok(msg) = reader.read_message().await {
-            if msg_tx.send(msg).await.is_err() {
-                break;
+pub fn snapshot(path: &Path, width: u16, height: u16) -> Result<()> {
+    let mut app = demo::Demo::new().app();
+    let mut terminal = Terminal::new(TestBackend::new(width, height))?;
+    terminal.draw(|f| view::draw(f, &mut app))?;
+    let buffer = terminal.backend().buffer();
+    if path.extension().is_some_and(|ext| ext == "svg") {
+        let mut svg = format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="0 0 {} {}"><rect width="100%" height="100%" fill="#121419"/><g font-family="Cascadia Mono,Consolas,Microsoft YaHei,monospace" font-size="16">"##,
+            width as usize * 10 + 32,
+            height as usize * 22 + 32,
+            width as usize * 10 + 32,
+            height as usize * 22 + 32
+        );
+        for y in 0..height {
+            let mut x = 0;
+            while x < width {
+                let cell = &buffer[(x, y)];
+                let symbol = cell.symbol();
+                let cells = unicode_width::UnicodeWidthStr::width(symbol).max(1) as u16;
+                let color = |color, fallback| match color {
+                    ratatui::style::Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
+                    _ => fallback,
+                };
+                let bg = color(cell.bg, "#121419".to_owned());
+                let fg = color(cell.fg, "#e1e4ea".to_owned());
+                let symbol = symbol
+                    .replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;");
+                let px = x as usize * 10 + 16;
+                let py = y as usize * 22 + 16;
+                let advance = cells as usize * 10;
+                svg.push_str(&format!(r#"<rect x="{px}" y="{py}" width="{advance}" height="22" fill="{bg}"/><text x="{px}" y="{}" fill="{fg}" textLength="{advance}" lengthAdjust="spacingAndGlyphs">{symbol}</text>"#,py+17));
+                x += cells;
             }
         }
-    });
+        svg.push_str("</g></svg>");
+        std::fs::write(path, svg)?;
+        return Ok(());
+    }
+    let mut text = String::new();
+    for y in 0..height {
+        let mut x = 0;
+        while x < width {
+            let symbol = buffer[(x, y)].symbol();
+            text.push_str(symbol);
+            x += unicode_width::UnicodeWidthStr::width(symbol).max(1) as u16;
+        }
+        text.push('\n');
+    }
+    std::fs::write(path, text)?;
+    Ok(())
+}
 
-    // Request initial dialogs
-    writer.send_request(&tg_ipc::protocol::Request {
-        id: uuid::Uuid::new_v4().to_string(),
-        method: methods::LIST_DIALOGS.to_string(),
-        params: serde_json::json!({"limit": 50}),
-    }).await?;
-
-    let mut app = App::new();
-    app.status = "Loading…".into();
-
-    let tick = Duration::from_millis(100);
-    let mut last_tick = Instant::now();
-
+pub async fn run(config: TgConfig, is_demo: bool) -> Result<()> {
+    anyhow::ensure!(
+        io::stdin().is_terminal() && io::stdout().is_terminal(),
+        "TUI 需要交互终端"
+    );
+    let mut fixture = demo::Demo::new();
+    let mut app = if is_demo {
+        fixture.app()
+    } else {
+        App::new(config.tui.message_page_size, false)
+    };
+    let draft_path = config.tdlib.database_directory.join("tui-drafts.json");
+    if !is_demo {
+        if let Ok(content) = std::fs::read_to_string(&draft_path) {
+            app.drafts = serde_json::from_str(&content).unwrap_or_default();
+        }
+    }
+    let client = if is_demo {
+        None
+    } else {
+        Some(IpcClient::connect(&config.ipc.socket_path).await?)
+    };
+    let (mut writer, mut reader) = match client {
+        Some(client) => {
+            let (w, r) = client.split();
+            (Some(w), Some(r))
+        }
+        None => (None, None),
+    };
+    let _guard = TerminalGuard::enter(config.tui.enable_mouse)?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            io::stdout(),
+            DisableMouseCapture,
+            DisableBracketedPaste,
+            DisableFocusChange,
+            LeaveAlternateScreen,
+            crossterm::cursor::Show
+        );
+        previous(info);
+    }));
+    if !is_demo {
+        app.bootstrap();
+    }
+    let mut events = EventStream::new();
+    let mut tick = tokio::time::interval(Duration::from_millis(100));
+    let mut reconnect_after = Instant::now();
     loop {
-        terminal.draw(|f| ui(f, &app))?;
-        let timeout = tick.checked_sub(last_tick.elapsed()).unwrap_or(Duration::ZERO);
-
-        if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                handle_key(key, &mut app, &mut writer).await?;
-            }
-        }
-        if last_tick.elapsed() >= tick { last_tick = Instant::now(); }
-
-        while let Ok(msg) = msg_rx.try_recv() {
-            handle_event(&msg, &mut app);
-        }
-        if !app.running { break; }
-    }
-
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-    Ok(())
-}
-
-async fn handle_key(key: KeyEvent, app: &mut App, writer: &mut IpcWriter) -> Result<()> {
-    match app.focus {
-        Focus::Dialogs => match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => app.running = false,
-            KeyCode::Char('i') | KeyCode::Enter => app.focus = Focus::Input,
-            KeyCode::Char('j') | KeyCode::Down => {
-                if app.selected < app.dialogs.len().saturating_sub(1) {
-                    app.selected += 1;
-                    load_msgs(app, writer).await?;
+        // Requests remain ordered; rendering and update handling never await TDLib responses.
+        while let Some(request) = app.outbox.pop_front() {
+            if is_demo {
+                app.handle(fixture.respond(request));
+            } else if let Some(writer) = &mut writer {
+                if !matches!(
+                    tokio::time::timeout(Duration::from_secs(2), writer.send_request(&request))
+                        .await,
+                    Ok(Ok(()))
+                ) {
+                    app.disconnect();
+                    break;
                 }
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if app.selected > 0 {
-                    app.selected -= 1;
-                    load_msgs(app, writer).await?;
-                }
-            }
-            KeyCode::Char('/') => {
-                app.focus = Focus::Input;
-                app.input = "/".into();
-            }
-            _ => {}
-        },
-        Focus::Input => match key.code {
-            KeyCode::Esc => { app.input.clear(); app.focus = Focus::Dialogs; }
-            KeyCode::Enter => {
-                let text: String = app.input.drain(..).collect();
-                if !text.is_empty() {
-                    if text.starts_with("/q") { app.running = false; }
-                    else if let Some(chat) = app.current_chat() {
-                        writer.send_request(&tg_ipc::protocol::Request {
-                            id: uuid::Uuid::new_v4().to_string(),
-                            method: methods::SEND_MESSAGE.to_string(),
-                            params: serde_json::json!({"chat_id": chat, "text": text}),
-                        }).await?;
+        }
+        terminal.draw(|f| view::draw(f, &mut app))?;
+        if app.quit {
+            break;
+        }
+        tokio::select! {
+            event=events.next()=>match event {
+                Some(Ok(Event::Key(key))) if key.kind==KeyEventKind::Press || key.kind==KeyEventKind::Repeat=>app.key(key),
+                Some(Ok(Event::Paste(text)))=>{
+                    match app.focus {
+                        Focus::Composer=>{app.editor.insert(&text);app.save_draft();}
+                        Focus::ChatSearch|Focus::MessageSearch=>app.search.insert(&text.replace(['\r','\n'],"")),
+                        Focus::Palette=>app.palette.insert(&text.replace(['\r','\n'],"")),
+                        Focus::Login=>app.auth_input.insert(text.trim_end_matches(['\r','\n'])),
+                        _=>{}
                     }
                 }
-            }
-            KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
-                app.input.push(c);
-            }
-            KeyCode::Backspace => { app.input.pop(); }
-            _ => {}
-        },
-    }
-    Ok(())
-}
-
-async fn load_msgs(app: &mut App, writer: &mut IpcWriter) -> Result<()> {
-    if let Some(chat) = app.current_chat() {
-        writer.send_request(&tg_ipc::protocol::Request {
-            id: uuid::Uuid::new_v4().to_string(),
-            method: methods::GET_MESSAGES.to_string(),
-            params: serde_json::json!({"chat_id": chat, "limit": 200}),
-        }).await?;
-    }
-    Ok(())
-}
-
-fn handle_event(msg: &ServerMessage, app: &mut App) {
-    match msg {
-        ServerMessage::Response(resp) => {
-            if let Some(result) = &resp.result {
-                // Chat list: handler returns array of Chat objects
-                if let Some(arr) = result.as_array() {
-                    if arr.first().map(|v| v.get("title").is_some()).unwrap_or(false) {
-                        app.dialogs.clear();
-                        for item in arr {
-                            let id = item["id"].as_i64().unwrap_or(0);
-                            let title = item["title"].as_str().unwrap_or("?").to_string();
-                            let unread = item["unread_count"].as_i64().unwrap_or(0) as i32;
-                            app.dialogs.push((id, title, unread));
+                Some(Ok(Event::Mouse(mouse))) if config.tui.enable_mouse && app.ready()=>{
+                    let position=ratatui::layout::Position::new(mouse.column,mouse.row);
+                    if app.help || app.info.is_some() || app.confirm.is_some() || app.focus==Focus::Palette {continue;}
+                    match mouse.kind {
+                        MouseEventKind::Down(MouseButton::Left)=>{
+                            if app.hit.search.contains(position) {app.focus=Focus::ChatSearch;app.search.set(app.chat_query.clone());}
+                            else if app.hit.composer.contains(position) {app.focus=Focus::Composer;app.mark_visible_read();}
+                            else if let Some((_,index))=app.hit.chat_rows.iter().find(|(r,_)|r.contains(position)).copied() {app.select_chat(index);app.focus=Focus::Composer;}
+                            else if let Some((_,index))=app.hit.message_rows.iter().find(|(r,_)|r.contains(position)).copied() {app.message_state.select(Some(index));app.focus=Focus::Messages;}
                         }
-                        app.status = format!("{} chats", app.dialogs.len());
+                        MouseEventKind::ScrollUp|MouseEventKind::ScrollDown=>{
+                            let code=if mouse.kind==MouseEventKind::ScrollUp {crossterm::event::KeyCode::Up}else{crossterm::event::KeyCode::Down};
+                            app.focus=if app.hit.chats.contains(position){Focus::Chats}else{Focus::Messages};
+                            app.key(crossterm::event::KeyEvent::new(code,crossterm::event::KeyModifiers::NONE));
+                            if app.focus==Focus::Messages && app.message_state.selected()==Some(0) && mouse.kind==MouseEventKind::ScrollUp {
+                                let before=app.messages.first().and_then(|m|m["id"].as_i64()).unwrap_or(0);app.load_history(before);
+                            }
+                        }
+                        _=>{}
                     }
                 }
-
-                // Messages: TDLib getChatHistory returns { "messages": [...] }
-                if let Some(msgs) = result.get("messages").and_then(|v| v.as_array()) {
-                    app.messages.clear();
-                    app.status = format!("{} messages", msgs.len());
-                    for m in msgs {
-                        let id = m["id"].as_i64().unwrap_or(0);
-                        let is_out = m["is_outgoing"].as_bool().unwrap_or(false);
-                        let sender = if is_out {
-                            "Me".to_string()
-                        } else {
-                            m["sender_id"]["user_id"].as_i64()
-                                .map(|u| format!("user#{u}"))
-                                .unwrap_or_else(|| "system".into())
-                        };
-                        let text = m["content"]["text"]["text"]
-                            .as_str()
-                            .map(|s| s.to_string())
-                            .or_else(|| m["content"]["caption"]["text"].as_str().map(|s| s.to_string()))
-                            .unwrap_or_else(|| detect_content_label(m));
-                        let ts = m["date"].as_i64().unwrap_or(0);
-                        app.messages.push((id, sender, text, fmt_time(ts)));
-                    }
-                } else {
-                    let keys: Vec<String> = result.as_object()
-                        .map(|o| o.keys().cloned().collect())
-                        .unwrap_or_default();
-                    app.status = format!("resp keys: {:?}", keys);
+                Some(Ok(Event::FocusGained))=>{app.window_focused=true;app.mark_visible_read();}
+                Some(Ok(Event::FocusLost))=>app.window_focused=false,
+                Some(Err(error))=>return Err(error.into()),
+                None=>{app.save_draft();break;}
+                _=>{}
+            },
+            message=async {
+                match &mut reader {Some(reader)=>reader.read_message().await,None=>std::future::pending().await}
+            },if !is_demo && app.connected=>{
+                match message {
+                    Ok(message)=>app.handle(message),
+                    Err(_)=>{app.disconnect();writer=None;reader=None;reconnect_after=Instant::now()+Duration::from_secs(2);}
                 }
             }
-            if let Some(err) = &resp.error {
-                app.status = format!("❌ {}", err.message);
+            _=tick.tick()=>{
+                app.tick();
+                if !is_demo && app.draft_dirty && app.last_draft_save.elapsed()>Duration::from_secs(1) {
+                    save_drafts(&app,&draft_path)?;app.draft_dirty=false;app.last_draft_save=Instant::now();
+                    if app.edit.is_none() {
+                        if let Some(chat)=app.active {
+                            app.request("draft",json!({"chat_id":chat,"text":app.editor.text,"topic":app.topic}),Job::Draft);
+                        }
+                    }
+                }
+                if !is_demo && !app.connected && (app.reconnect || Instant::now()>=reconnect_after) {
+                    app.reconnect=false;
+                    if let Ok(client)=IpcClient::connect(&config.ipc.socket_path).await {
+                        let(w,r)=client.split();writer=Some(w);reader=Some(r);app.connected=true;
+                        app.generation+=1;app.bootstrap();app.refresh_chats();app.load_history(0);
+                    }
+                    reconnect_after=Instant::now()+Duration::from_secs(5);
+                }
             }
         }
-        ServerMessage::Event(ev) => {
-            if ev.name == "new_message" { app.status = "📨 New message".into(); }
-        }
-        ServerMessage::AuthState(a) => {
-            app.status = format!("🔐 {}", a.state);
-        }
     }
-}
-
-fn ui(f: &mut Frame, app: &App) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(3),
-            Constraint::Length(1),
-        ])
-        .split(f.area());
-
-    f.render_widget(
-        Paragraph::new(" 📱 tg tui │ j/k navigate │ i input │ /q quit ")
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        chunks[0],
-    );
-
-    let body = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-        .split(chunks[1]);
-
-    // Chat list
-    let ds = if app.focus == Focus::Dialogs { Style::default().fg(Color::Yellow) } else { Style::default() };
-    let items: Vec<ListItem> = app.dialogs.iter().enumerate().map(|(i, (_id, title, unread))| {
-        let s = if i == app.selected {
-            Style::default().fg(Color::Black).bg(Color::White).add_modifier(Modifier::BOLD)
-        } else { Style::default() };
-        let p = if *unread > 0 { format!("({unread}) ") } else { String::new() };
-        ListItem::new(Line::from(Span::styled(format!("{p}{title}"), s)))
-    }).collect();
-    f.render_widget(
-        List::new(items).block(Block::default().borders(Borders::ALL).title(" Chats ").border_style(ds)),
-        body[0],
-    );
-
-    // Messages
-    let msgs: Vec<Line> = app.messages.iter().map(|(_, sender, text, time)| {
-        let sender_color = if sender == "Me" { Color::Green } else { Color::Cyan };
-        Line::from(vec![
-            Span::styled(format!("[{time}] "), Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{sender}: "), Style::default().fg(sender_color).add_modifier(Modifier::BOLD)),
-            Span::raw(text.as_str()),
-        ])
-    }).collect();
-    f.render_widget(
-        Paragraph::new(msgs).block(Block::default().borders(Borders::ALL).title(" Messages ")).wrap(Wrap { trim: false }),
-        body[1],
-    );
-
-    // Input
-    let is = if app.focus == Focus::Input { Style::default().fg(Color::Yellow) } else { Style::default() };
-    f.render_widget(
-        Paragraph::new(format!("{}█", app.input))
-            .block(Block::default().borders(Borders::ALL).title(" Input ").border_style(is)),
-        chunks[2],
-    );
-
-    f.render_widget(
-        Paragraph::new(app.status.clone()).style(Style::default().fg(Color::DarkGray)),
-        chunks[3],
-    );
-}
-
-fn fmt_time(ts: i64) -> String {
-    use std::time::{Duration, UNIX_EPOCH};
-    let dt = UNIX_EPOCH + Duration::from_secs(ts as u64);
-    let dt: chrono::DateTime<chrono::Utc> = dt.into();
-    dt.format("%H:%M").to_string()
-}
-
-fn detect_content_label(m: &serde_json::Value) -> String {
-    let msg_type = m["content"]["@type"].as_str().unwrap_or("");
-    match msg_type {
-        "messagePhoto" => "📷 photo".into(),
-        "messageVideo" => "🎬 video".into(),
-        "messageVideoNote" => "🎥 video note".into(),
-        "messageAnimation" => "🎞️ gif".into(),
-        "messageSticker" => {
-            let emoji = m["content"]["sticker"]["emoji"].as_str().unwrap_or("🏷️");
-            format!("{emoji} sticker")
-        }
-        "messageDocument" => {
-            let name = m["content"]["document"]["file_name"].as_str().unwrap_or("file");
-            format!("📄 {name}")
-        }
-        "messageVoiceNote" => "🎤 voice".into(),
-        "messageAudio" => {
-            let title = m["content"]["audio"]["title"].as_str().unwrap_or("audio");
-            format!("🎵 {title}")
-        }
-        "messageLocation" => "📍 location".into(),
-        "messageContact" => "👤 contact".into(),
-        "messagePoll" => {
-            let question = m["content"]["poll"]["question"]["text"].as_str().unwrap_or("poll");
-            format!("📊 {question}")
-        }
-        "messageCall" => "📞 call".into(),
-        "messageGame" => "🎮 game".into(),
-        "messageInvoice" => "💰 invoice".into(),
-        "" => "[empty]".into(),
-        _ => format!("[{}]", msg_type.strip_prefix("message").unwrap_or(msg_type)),
+    app.save_draft();
+    if !is_demo {
+        save_drafts(&app, &draft_path)?;
     }
+    Ok(())
+}
+fn save_drafts(app: &App, path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temp = path.with_extension("json.tmp");
+    std::fs::write(&temp, serde_json::to_vec(&app.drafts)?)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))?;
+    }
+    std::fs::rename(temp, path)?;
+    Ok(())
 }

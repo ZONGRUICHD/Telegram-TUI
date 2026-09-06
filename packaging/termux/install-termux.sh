@@ -19,7 +19,7 @@ ok()   { echo -e "${GREEN}✅${RESET}  $*"; }
 fail() { echo -e "${RED}❌${RESET}  $*"; exit 1; }
 
 echo ""
-echo -e "${CYAN}${BOLD}  Telegram-CLI Termux 安装${RESET}"
+echo -e "${CYAN}${BOLD}  Telegram-TUI Termux 安装${RESET}"
 echo ""
 
 # 检查 Termux 环境
@@ -72,12 +72,12 @@ else
 fi
 
 # 编译项目
-info "编译 Telegram-CLI…"
+info "编译 Telegram-TUI…"
 cd "$HOME"
-if [[ ! -d Telegram-CLI ]]; then
-    git clone --depth 1 https://github.com/zong1024/Telegram-CLI.git
+if [[ ! -d Telegram-TUI ]]; then
+    git clone --depth 1 https://github.com/ZONGRUICHD/Telegram-TUI.git
 fi
-cd Telegram-CLI
+cd Telegram-TUI
 git pull --ff-only 2>/dev/null || true
 
 export LIBRARY_PATH="$PREFIX/lib:$LIBRARY_PATH"

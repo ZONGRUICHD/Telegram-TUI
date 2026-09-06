@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Telegram-CLI 卸载脚本
+# Telegram-TUI 卸载脚本
 set -euo pipefail
 
 PREFIX="${PREFIX:-$HOME/.cargo/bin}"
@@ -16,7 +16,7 @@ info() { echo -e "${GREEN}==>${RESET} $*"; }
 warn() { echo -e "${YELLOW}⚠️${RESET}   $*"; }
 
 echo ""
-echo -e "${BOLD}  Telegram-CLI 卸载程序${RESET}"
+echo -e "${BOLD}  Telegram-TUI 卸载程序${RESET}"
 echo ""
 
 # 停止服务

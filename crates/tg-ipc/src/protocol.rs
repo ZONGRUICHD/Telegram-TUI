@@ -12,7 +12,7 @@ pub const IPC_FRAME_MAX: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
-    pub id: String,  // UUID for request-response matching
+    pub id: String, // UUID for request-response matching
     pub method: String,
     #[serde(default)]
     pub params: JsonValue,
@@ -47,6 +47,13 @@ pub struct RpcError {
     pub code: i32,
     pub message: String,
 }
+
+impl std::fmt::Display for RpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RPC {}: {}", self.code, self.message)
+    }
+}
+impl std::error::Error for RpcError {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {

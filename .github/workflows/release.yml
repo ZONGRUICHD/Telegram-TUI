@@ -1,4 +1,4 @@
-name: Build Release Packages
+name: 构建发行包
 
 on:
   push:
@@ -6,285 +6,190 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-
-env:
-  CARGO_TERM_COLOR: always
-  TDLIB_VERSION: "1.8.0"
+  contents: read
 
 jobs:
-  # ── Linux x86_64: .deb + .tar.gz ──────────────────────────────────
-  build-linux:
-    runs-on: ubuntu-22.04
+  package:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            label: linux-x86_64
+          - os: windows-2025
+            label: windows-x86_64
+          - os: macos-15
+            label: macos-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 读取固定 TDLib 版本
+        shell: bash
+        run: echo "TDLIB_COMMIT=$(tr -d '\r\n' < TDLIB_COMMIT)" >> "$GITHUB_ENV"
 
-      - name: Install dependencies
+      - name: Linux 编译依赖
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake gperf zlib1g-dev libssl-dev libdbus-1-dev
+          sudo apt-get install -y cmake ninja-build gperf libssl-dev zlib1g-dev php-cli
 
-      - name: Cache TDLib
-        id: cache-tdlib
-        uses: actions/cache@v4
-        with:
-          path: /usr/local/lib/libtdjson*
-          key: tdlib-${{ env.TDLIB_VERSION }}
+      - name: macOS 编译依赖
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja gperf openssl@3
 
-      - name: Build TDLib
-        if: steps.cache-tdlib.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 --branch "v${{ env.TDLIB_VERSION }}" https://github.com/tdlib/td.git /tmp/td
-          cd /tmp/td && mkdir build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DTD_ENABLE_JNI=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-          cmake --build . --parallel $(nproc)
-          sudo cmake --install .
-          sudo ldconfig
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: linux-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build
-        run: cargo build --release
-
-      - name: Strip binaries
-        run: strip target/release/tg target/release/tgcd
-
-      - name: Create tar.gz
-        run: |
-          mkdir -p dist
-          tar -czf dist/telegram-cli_${{ github.ref_name }}_linux_amd64.tar.gz \
-            -C target/release tg tgcd
-
-      - name: Create .deb
-        run: |
-          VERSION=$(echo ${{ github.ref_name }} | sed 's/^v//')
-          PKGROOT=$(pwd)/deb-pkg
-          DEB_DIR="$PKGROOT/telegram-cli"
-          mkdir -p "$DEB_DIR/DEBIAN" "$DEB_DIR/usr/bin" "$DEB_DIR/usr/lib/systemd/user" "$DEB_DIR/usr/share/doc/telegram-cli"
-          cp target/release/tg target/release/tgcd "$DEB_DIR/usr/bin/"
-          cp scripts/tgcd.service "$DEB_DIR/usr/lib/systemd/user/"
-          cp README.md LICENSE docs/tutorial.md "$DEB_DIR/usr/share/doc/telegram-cli/"
-          printf "Package: telegram-cli\nVersion: %s\nSection: net\nPriority: optional\nArchitecture: amd64\nMaintainer: zong1024 <zong1024@gmail.com>\nDepends: libc6, libssl3\nDescription: Telegram CLI\n TDLib + Rust daemon + TUI/CLI Telegram client.\n" "$VERSION" > "$DEB_DIR/DEBIAN/control"
-          echo "2.0" > "$PKGROOT/debian-binary"
-          tar -czf "$PKGROOT/control.tar.gz" -C "$DEB_DIR" DEBIAN
-          tar -czf "$PKGROOT/data.tar.gz" -C "$DEB_DIR" usr
-          ar rcs "dist/telegram-cli_${VERSION}_amd64.deb" "$PKGROOT/debian-binary" "$PKGROOT/control.tar.gz" "$PKGROOT/data.tar.gz"
-          rm -rf "$PKGROOT"
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-packages
-          path: dist/*.deb
-
-      - name: Upload tarball
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-tarball
-          path: dist/*.tar.gz
-
-  # ── Fedora: .rpm ──────────────────────────────────────────────────
-  build-fedora:
-    runs-on: ubuntu-22.04
-    container: fedora:42
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          dnf install -y cargo cmake gcc gcc-c++ pkgconf zlib-devel openssl-devel \
-            dbus-devel rpm-build tar git gperf
-
-      - name: Build TDLib
-        run: |
-          git clone --depth 1 --branch "v${{ env.TDLIB_VERSION }}" https://github.com/tdlib/td.git /tmp/td
-          cd /tmp/td && mkdir build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DTD_ENABLE_JNI=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-          cmake --build . --parallel $(nproc)
-          cmake --install .
-          ldconfig
-
-      - name: Build
-        run: cargo build --release
-
-      - name: Strip binaries
-        run: strip target/release/tg target/release/tgcd
-
-      - name: Create .rpm
-        run: |
-          VERSION=$(echo ${{ github.ref_name }} | sed 's/^v//')
-          TOPDIR=/tmp/rpmbuild
-          mkdir -p $TOPDIR/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-
-          # Create source tarball
-          tar -czf $TOPDIR/SOURCES/telegram-cli-${VERSION}.tar.gz \
-            --transform "s,^\.,telegram-cli-${VERSION}," .
-
-          cp packaging/rpm/telegram-cli.spec $TOPDIR/SPECS/
-
-          rpmbuild -bb $TOPDIR/SPECS/telegram-cli.spec \
-            --define "_topdir $TOPDIR" \
-            --define "version ${VERSION}" || true
-
-          mkdir -p dist
-          find $TOPDIR/RPMS -name "*.rpm" -exec cp {} dist/ \;
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: fedora-rpm
-          path: dist/*.rpm
-
-  # ── Arch Linux: tarball (for AUR) ─────────────────────────────────
-  build-arch:
-    runs-on: ubuntu-22.04
-    container: archlinux:latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          pacman -Syu --noconfirm
-          pacman -S --needed --noconfirm base-devel cmake gperf zlib openssl git rust dbus
-
-      - name: Install TDLib from AUR-like build
-        run: |
-          git clone --depth 1 --branch "v${{ env.TDLIB_VERSION }}" https://github.com/tdlib/td.git /tmp/td
-          cd /tmp/td && mkdir build && cd build
-          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DTD_ENABLE_JNI=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-          cmake --build . --parallel $(nproc)
-          cmake --install .
-
-      - name: Build
-        run: |
-          export LD_LIBRARY_PATH=/usr/lib:$LD_LIBRARY_PATH
-          cargo build --release
-
-      - name: Strip binaries
-        run: strip target/release/tg target/release/tgcd
-
-      - name: Create Arch package tarball
-        run: |
-          VERSION=$(echo ${{ github.ref_name }} | sed 's/^v//')
-          mkdir -p dist
-          tar -czf dist/telegram-cli_${VERSION}_x86_64.pkg.tar.zst \
-            -C target/release tg tgcd
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: arch-package
-          path: dist/*.pkg.tar.zst
-
-  # ── Windows: .exe (zip) ───────────────────────────────────────────
-  build-windows:
-    runs-on: windows-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Install vcpkg
-        run: |
-          git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
-          C:\vcpkg\bootstrap-vcpkg.bat
-
-      - name: Install TDLib via vcpkg
-        run: |
-          C:\vcpkg\vcpkg install tdlib:x64-windows
-          # Clean up build trees to free disk space
-          Remove-Item -Recurse -Force C:\vcpkg\buildtrees -ErrorAction SilentlyContinue
-          Remove-Item -Recurse -Force C:\vcpkg\downloads -ErrorAction SilentlyContinue
-          Remove-Item -Recurse -Force C:\vcpkg\packages -ErrorAction SilentlyContinue
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build
-        env:
-          LIBTDJSON_PATH: C:\vcpkg\installed\x64-windows\bin\tdjson.dll
-        run: cargo build --release
-
-      - name: Create zip
+      - name: Windows 编译依赖
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}" -replace '^v',''
-          $dist = "dist"
-          New-Item -ItemType Directory -Path $dist -Force
-          Compress-Archive -Path "target\release\tg.exe","target\release\tgcd.exe" `
-            -DestinationPath "$dist\telegram-cli_${version}_windows_x86_64.zip"
+          & "$env:VCPKG_INSTALLATION_ROOT/vcpkg.exe" install openssl:x64-windows zlib:x64-windows --clean-after-build
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg 安装失败" }
+          choco install gperf -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "gperf 安装失败" }
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - name: 缓存 TDLib 动态库
+        id: native-cache
+        uses: actions/cache@v4
         with:
-          name: windows-zip
-          path: dist/*.zip
+          path: native
+          key: tdlib-${{ matrix.label }}-${{ env.TDLIB_COMMIT }}-v1
 
-  # ── macOS: tar.gz ─────────────────────────────────────────────────
-  build-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Install TDLib
-        run: brew install tdlib
-
-      - name: Build
-        run: cargo build --release
-
-      - name: Strip binaries
-        run: strip target/release/tg target/release/tgcd
-
-      - name: Create tar.gz
+      - name: 获取官方固定源码
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        shell: bash
         run: |
-          mkdir -p dist
-          tar -czf dist/telegram-cli_${{ github.ref_name }}_darwin_amd64.tar.gz \
-            -C target/release tg tgcd
+          git init td-source
+          git -C td-source remote add origin https://github.com/tdlib/td.git
+          git -C td-source fetch --depth 1 origin "$TDLIB_COMMIT"
+          git -C td-source checkout --detach FETCH_HEAD
+          test "$(git -C td-source rev-parse HEAD)" = "$TDLIB_COMMIT"
 
-      - name: Upload artifacts
+      - name: 编译 TDLib（Linux）
+        if: runner.os == 'Linux' && steps.native-cache.outputs.cache-hit != 'true'
+        run: |
+          git -C td-source apply --unidiff-zero ../scripts/tdlib-split-fix.patch
+          (cd td-source && php SplitSource.php)
+          cmake -S td-source -B td-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_LTO=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          cmake --build td-build --target tdjson --parallel 2
+          mkdir -p native
+          cp td-build/libtdjson.so native/
+          cp td-source/LICENSE_1_0.txt native/TDLib-LICENSE.txt
+
+      - name: 编译 TDLib（macOS）
+        if: runner.os == 'macOS' && steps.native-cache.outputs.cache-hit != 'true'
+        run: |
+          cmake -S td-source -B td-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DTD_ENABLE_LTO=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)" -DOPENSSL_USE_STATIC_LIBS=TRUE
+          cmake --build td-build --target tdjson --parallel 2
+          mkdir -p native
+          cp td-build/libtdjson.dylib native/
+          cp td-source/LICENSE_1_0.txt native/TDLib-LICENSE.txt
+          openssl_license=$(find "$(brew --prefix openssl@3)/" -name LICENSE.txt -type f -print -quit)
+          test -n "$openssl_license"
+          cp "$openssl_license" native/OpenSSL-LICENSE.txt
+
+      - name: 编译 TDLib（Windows）
+        if: runner.os == 'Windows' && steps.native-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $gperf = (Get-Command gperf.exe -ErrorAction Stop).Source
+          cmake -S td-source -B td-build -A x64 "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" "-DVCPKG_TARGET_TRIPLET=x64-windows" "-DGPERF_EXECUTABLE=$gperf" "-DTD_ENABLE_LTO=OFF" "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+          if ($LASTEXITCODE -ne 0) { throw "CMake 配置失败" }
+          cmake --build td-build --config Release --target tdjson --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "TDLib 编译失败" }
+          New-Item -ItemType Directory -Path native -Force | Out-Null
+          Copy-Item td-build/Release/tdjson.dll native/
+          Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/bin/*.dll" native/
+          Copy-Item td-source/LICENSE_1_0.txt native/TDLib-LICENSE.txt
+          Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/share/openssl/copyright" native/OpenSSL-LICENSE.txt
+          Copy-Item "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows/share/zlib/copyright" native/zlib-LICENSE.txt
+
+      - name: 构建 Rust 程序
+        env:
+          TG_APP_API_ID: ${{ secrets.TG_APP_API_ID }}
+          TG_APP_API_HASH: ${{ secrets.TG_APP_API_HASH }}
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]] && { [[ -z "$TG_APP_API_ID" ]] || [[ -z "$TG_APP_API_HASH" ]]; }; then
+            echo "正式发行包需配置 TG_APP_API_ID / TG_APP_API_HASH；普通使用者只进行手机号登录。"
+            exit 1
+          fi
+          cargo build --workspace --release --locked
+
+      - name: 汇总 Rust 依赖许可证
+        shell: bash
+        run: |
+          cargo install --locked --features cli cargo-about
+          cargo about generate about.hbs > THIRD-PARTY-LICENSES.html
+
+      - name: 组装并验证发行包
+        shell: pwsh
+        run: |
+          $label = '${{ matrix.label }}'
+          $package = Join-Path $PWD "dist/telegram-tui-$label"
+          New-Item -ItemType Directory -Path $package -Force | Out-Null
+          $suffix = if ($IsWindows) { '.exe' } else { '' }
+          Copy-Item "target/release/tg$suffix","target/release/tgcd$suffix" $package
+          Copy-Item native/* $package
+          Copy-Item README.md,LICENSE,TDLIB_COMMIT,THIRD_PARTY_NOTICES.md,THIRD-PARTY-LICENSES.html $package
+          Copy-Item docs -Destination $package -Recurse
+          & "$package/tg$suffix" --version
+          if ($LASTEXITCODE -ne 0) { throw "tg 无法启动" }
+          $metadata = & "$package/tgcd$suffix" --check-library
+          if ($LASTEXITCODE -ne 0) { throw "打包后的 TDLib 无法加载" }
+          $metadata | Set-Content -LiteralPath "$package/TDLIB-BUILD.json" -Encoding utf8
+          $library = $metadata | ConvertFrom-Json
+          if ($library.commit -ne $env:TDLIB_COMMIT) { throw "TDLib 源码版本不一致" }
+          & "$package/tg$suffix" tui --demo --snapshot "$package/preview.svg"
+          if ($LASTEXITCODE -ne 0) { throw "TUI 渲染失败" }
+          if ($IsWindows) {
+            Compress-Archive -Path "$package/*" -DestinationPath "dist/telegram-tui-$label.zip"
+          } else {
+            tar -czf "dist/telegram-tui-$label.tar.gz" -C $package .
+            if ($LASTEXITCODE -ne 0) { throw "压缩失败" }
+          }
+
+      - name: 构建 Debian 包
+        if: runner.os == 'Linux'
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+          root=dist/debian-root
+          mkdir -p "$root/DEBIAN" "$root/usr/lib/telegram-tui" "$root/usr/bin" "$root/usr/share/doc/telegram-cli"
+          cp dist/telegram-tui-linux-x86_64/tg dist/telegram-tui-linux-x86_64/tgcd dist/telegram-tui-linux-x86_64/libtdjson.so "$root/usr/lib/telegram-tui/"
+          ln -s ../lib/telegram-tui/tg "$root/usr/bin/tg"
+          ln -s ../lib/telegram-tui/tgcd "$root/usr/bin/tgcd"
+          cp README.md LICENSE THIRD_PARTY_NOTICES.md THIRD-PARTY-LICENSES.html native/TDLib-LICENSE.txt "$root/usr/share/doc/telegram-cli/"
+          printf 'Package: telegram-cli\nVersion: %s\nArchitecture: amd64\nMaintainer: ZONGRUICHD\nDepends: libc6, libstdc++6, libssl3, zlib1g\nDescription: Telegram-TUI terminal client and AI CLI\n' "$version" > "$root/DEBIAN/control"
+          dpkg-deb --build --root-owner-group "$root" "dist/telegram-tui-linux-x86_64.deb"
+
+      - name: 上传经过验证的构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: macos-tarball
-          path: dist/*.tar.gz
+          name: telegram-tui-${{ matrix.label }}
+          if-no-files-found: error
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.deb
 
-  # ── Release: upload all artifacts ─────────────────────────────────
   release:
-    needs: [build-linux, build-fedora, build-arch, build-macos]
-    runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-
-      - name: List artifacts
-        run: find artifacts -type f | sort
-
-      - name: Create release and upload
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
+          draft: true
+          name: 'Telegram-TUI ${{ github.ref_name }}'
+          body: '终端聊天与 AI CLI。请完成真实账号验收后发布；构建说明见 docs/BUILD.md。'
           files: |
-            artifacts/**/*.deb
-            artifacts/**/*.tar.gz
-            artifacts/**/*.rpm
-            artifacts/**/*.pkg.tar.zst
             artifacts/**/*.zip
-          generate_release_notes: true
+            artifacts/**/*.tar.gz
+            artifacts/**/*.deb

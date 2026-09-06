@@ -1,4 +1,4 @@
-# Telegram-CLI
+# Telegram-TUI
 
 **TDLib + Rust daemon + TUI/CLI** — 完整终端 Telegram 客户端
 
@@ -60,8 +60,8 @@ crates/
 ### 一键安装
 
 ```bash
-git clone https://github.com/zong1024/Telegram-CLI.git
-cd Telegram-CLI
+git clone https://github.com/ZONGRUICHD/Telegram-TUI.git
+cd Telegram-TUI
 ./scripts/install.sh
 ```
 

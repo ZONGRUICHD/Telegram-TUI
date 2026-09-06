@@ -12,3 +12,7 @@
 /sessions/
 /config.toml
 dist/
+/native/
+/td-source/
+/td-build/
+/THIRD-PARTY-LICENSES.html

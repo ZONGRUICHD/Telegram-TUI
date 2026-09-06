@@ -1,155 +1,143 @@
-//! `tgcd` — Telegram CLI Daemon.
-//!
-//! Background daemon that owns the TDLib connection, caches messages in
-//! SQLite, and accepts client connections over a Unix socket.
-
-mod auth;
-mod cache;
+//! Owns one TDLib session and serves local CLI / TUI clients.
 mod dispatcher;
 mod handler;
 mod ipc;
 mod tdlib;
-
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
-use tokio::sync::broadcast;
-use tracing::info;
-use tracing_subscriber::EnvFilter;
-
+use fs2::FileExt;
 use tg_core::config::TgConfig;
+use tokio::sync::{broadcast, watch};
 
 #[derive(Parser)]
-#[command(name = "tgcd", about = "Telegram CLI daemon", version)]
+#[command(name = "tgcd", about = "Telegram-TUI 本地会话服务", version)]
 struct Args {
     #[arg(short, long)]
-    config: Option<String>,
+    config: Option<std::path::PathBuf>,
+    /// 离线检查动态库和协议版本，不读取账号配置、不连接 Telegram
+    #[arg(long)]
+    check_library: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
         )
         .init();
-
     let args = Args::parse();
-
-    let config: TgConfig = if let Some(path) = args.config {
-        let content = std::fs::read_to_string(&path)?;
-        toml::from_str(&content)?
-    } else {
-        TgConfig::load().unwrap_or_else(|_| {
-            eprintln!("No config found. Run: tg init");
-            std::process::exit(1);
-        })
-    };
-
-    let api_hash = config.load_api_hash();
-
-    // Ensure directories
+    if args.check_library {
+        tg_tdjson::load_library()?;
+        let version = tg_tdjson::execute(r#"{"@type":"getOption","name":"version"}"#)
+            .context("TDLib 未返回版本")?;
+        let commit = tg_tdjson::execute(r#"{"@type":"getOption","name":"commit_hash"}"#)
+            .context("TDLib 未返回源码版本")?;
+        let version: serde_json::Value = serde_json::from_str(&version)?;
+        let commit: serde_json::Value = serde_json::from_str(&commit)?;
+        println!(
+            "{}",
+            serde_json::json!({"version":version["value"],"commit":commit["value"],"expected_commit":include_str!("../../../TDLIB_COMMIT").trim()})
+        );
+        return Ok(());
+    }
+    let config = TgConfig::load_from(&args.config.unwrap_or_else(TgConfig::config_path))?;
+    let (api_id, api_hash) = config.application_credentials()?;
     std::fs::create_dir_all(&config.tdlib.database_directory)?;
     std::fs::create_dir_all(&config.tdlib.files_directory)?;
     if let Some(parent) = config.ipc.socket_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-
-    info!("Starting tgcd…");
-    info!("Socket : {}", config.ipc.socket_path.display());
-    info!("DB     : {}", config.database_path().display());
-
-    // Initialize TDLib with global receive loop
-    let (updates_tx, _updates_rx) = broadcast::channel::<serde_json::Value>(256);
+    let lock_path = config.ipc.socket_path.with_extension("lock");
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)?;
+    lock.try_lock_exclusive()
+        .context("此配置的 tgcd 已在运行")?;
+    let db_lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(config.tdlib.database_directory.join("tui.lock"))?;
+    db_lock
+        .try_lock_exclusive()
+        .context("此 TDLib 会话正在被另一服务使用")?;
+    tg_tdjson::load_library()?;
     tg_tdjson::set_log_verbosity(config.tdlib.verbosity);
+    let (updates_tx, updates_rx) = broadcast::channel(4096);
     tg_tdjson::init(updates_tx.clone());
-
-    // Create TDLib client
+    let snapshot = std::sync::Arc::new(std::sync::RwLock::new(dispatcher::Snapshot::default()));
+    let snapshot_task = tokio::spawn(dispatcher::run(updates_rx, snapshot.clone()));
     let td = tg_tdjson::TdClient::new();
-
-    // Configure TDLib parameters
-    td.send(serde_json::json!({
-        "@type": "setTdlibParameters",
-        "database_directory": config.tdlib.database_directory.to_string_lossy(),
-        "files_directory": config.tdlib.files_directory.to_string_lossy(),
-        "use_message_database": config.tdlib.use_message_database,
-        "use_secret_chats": config.tdlib.use_secret_chats,
-        "use_test_dc": config.tdlib.test,
-        "api_id": config.telegram.api_id,
-        "api_hash": api_hash,
-        "system_language_code": config.tdlib.system_language_code,
-        "device_model": config.tdlib.device_model,
-        "system_version": std::env::consts::OS,
-        "application_version": config.tdlib.application_version,
-        "enable_storage_optimizer": true
-    }))
-    .await?;
-
-    // Set database encryption key
-    td.send(serde_json::json!({
-        "@type": "setDatabaseEncryptionKey",
-        "new_encryption_key": ""
-    }))
-    .await?;
-
-    // Configure proxy if enabled
-    if config.proxy.enabled {
-        let proxy_type = match config.proxy.kind.as_str() {
-            "socks5" => "proxyTypeSocks5",
-            "http" => "proxyTypeHttp",
-            "mtproto" => "proxyTypeMtproto",
-            _ => "proxyTypeSocks5",
-        };
-        td.send(serde_json::json!({
-            "@type": "addProxy",
-            "server": config.proxy.host,
-            "port": config.proxy.port as i64,
-            "enable": true,
-            "type": {
-                "@type": proxy_type,
-                "username": config.proxy.username,
-                "password": config.proxy.password,
-            }
-        }))
+    let auth = tdlib::query(&td, serde_json::json!({"@type":"getAuthorizationState"})).await?;
+    if auth["@type"] == "authorizationStateWaitTdlibParameters" {
+        tdlib::query(
+            &td,
+            serde_json::json!({
+                "@type":"setTdlibParameters",
+                "database_directory":config.tdlib.database_directory,
+                "files_directory":config.tdlib.files_directory,
+                "database_encryption_key":"",
+                "use_file_database":true, "use_chat_info_database":true,
+                "use_message_database":config.tdlib.use_message_database,
+                "use_secret_chats":config.tdlib.use_secret_chats,
+                "use_test_dc":config.tdlib.test,
+                "api_id":api_id, "api_hash":api_hash,
+                "system_language_code":config.tdlib.system_language_code,
+                "device_model":config.tdlib.device_model,
+                "system_version":std::env::consts::OS,
+                "application_version":env!("CARGO_PKG_VERSION")
+            }),
+        )
         .await?;
-        info!("Proxy configured: {}://{}:{}", config.proxy.kind, config.proxy.host, config.proxy.port);
     }
-
-    // Open SQLite cache
-    let cache = cache::Cache::new(&config.database_path()).await?;
-
-    // Spawn cache updater
-    let td_clone = td.clone();
-    let cache_clone = cache.clone();
-    tokio::spawn(async move {
-        dispatcher::run_cache_updater(td_clone, cache_clone).await;
-    });
-
-    // Trigger auth state machine (non-blocking)
-    // TDLib will send updateAuthorizationState events that flow to IPC clients
-    td.send_no_wait(serde_json::json!({"@type": "getAuthorizationState"}));
-
+    if config.proxy.enabled {
+        let kind = match config.proxy.kind.as_str() {
+            "socks5" => {
+                serde_json::json!({"@type":"proxyTypeSocks5","username":config.proxy.username,"password":config.proxy.password})
+            }
+            "http" => {
+                serde_json::json!({"@type":"proxyTypeHttp","username":config.proxy.username,"password":config.proxy.password,"http_only":false})
+            }
+            "mtproto" => {
+                serde_json::json!({"@type":"proxyTypeMtproto","secret":config.proxy.password})
+            }
+            other => anyhow::bail!("不支持的代理类型：{other}"),
+        };
+        tdlib::query(&td, serde_json::json!({"@type":"addProxy",
+            "proxy":{"@type":"proxy","server":config.proxy.host,"port":config.proxy.port,"type":kind},
+            "enable":true,"comment":"Telegram-TUI"})).await?;
+    }
+    let (shutdown_tx, _) = watch::channel(false);
     let state = handler::AppState {
         config: config.clone(),
-        td,
-        cache,
+        td: td.clone(),
         updates_tx,
+        shutdown_tx,
+        snapshot,
     };
-
-    // Remove stale socket
-    if config.ipc.socket_path.exists() {
-        std::fs::remove_file(&config.ipc.socket_path)?;
-    }
-
-    // Write PID file (for `tg stop`)
-    let pid_path = config.ipc.socket_path.with_extension("pid");
-    std::fs::write(&pid_path, std::process::id().to_string())?;
-
-    info!("IPC server starting — use `tg login` to authenticate");
-
-    // Start IPC server (auth happens via IPC commands, not blocking here)
     let result = ipc::run(&config.ipc.socket_path, state).await;
-
-    // Cleanup PID file on exit
-    let _ = std::fs::remove_file(&pid_path);
+    let mut closing_updates = tg_tdjson::subscribe_updates();
+    if tdlib::query(&td, serde_json::json!({"@type":"close"}))
+        .await
+        .is_ok()
+    {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            while let Ok(update) = closing_updates.recv().await {
+                if update["authorization_state"]["@type"] == "authorizationStateClosed" {
+                    break;
+                }
+            }
+        })
+        .await;
+    }
+    snapshot_task.abort();
+    drop(db_lock);
+    drop(lock);
     result
 }

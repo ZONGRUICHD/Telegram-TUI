@@ -9,10 +9,10 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
-rust-version = "1.75"
+rust-version = "1.88"
 
 [workspace.dependencies]
 # async runtime
@@ -32,13 +32,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap          = { version = "4", features = ["derive"] }
 # TUI
 ratatui       = "0.29"
-crossterm     = "0.28"
-# database
-sqlx          = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+crossterm     = { version = "0.28", features = ["event-stream"] }
 # config & secrets
 directories   = "6"
 toml          = "0.8"
-keyring       = { version = "3", features = ["sync-secret-service"] }
+keyring       = { version = "3" }
 # concurrency
 dashmap       = "6"
 uuid          = { version = "1", features = ["v4", "serde"] }
